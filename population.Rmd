@@ -1,0 +1,52 @@
+---
+title: "calculate rural population"
+output: html_notebook
+---
+
+
+Now we want to get the RUCA codes.
+
+```{r}
+library(readxl)
+library(data.table)
+data_dir <- "/Users/benjaminsmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/"
+```
+
+```{r}
+ruca2010_zip_code_descriptions <- readxl::read_xlsx(paste0(data_dir , "RUCA2010zipcode.xlsx" ),sheet = 1)
+ruca2010_zip_codes <- readxl::read_xlsx(paste0(data_dir , "RUCA2010zipcode.xlsx" ),sheet = "Data")
+ruca2010_zip_codes_details <- readxl::read_xlsx(paste0(data_dir , "RUCA2010zipcode.xlsx" ),sheet = "RUCA code description")
+ruca1010_zip_code_ruca_description_table <- readr::read_csv(paste0(data_dir,"RUCA2010zipcode_primary_code_key.csv"))
+
+readxl::excel_sheets(paste0(data_dir,"ruca2010revised.xlsx"))
+ruca_2010_revised <- data.table(readxl::read_xlsx(paste0(data_dir,"ruca2010revised.xlsx"),sheet="Data",skip = 1))
+```
+
+
+```{r}
+ruca_2010_revised_oregon = ruca_2010_revised[ruca_2010_revised$`Select State`=="OR",]
+
+ruca_2010_revised_oregon
+
+```
+
+now we have to match these FIPS codes to records of which
+
+```{r}
+population_by_code <- ruca_2010_revised_oregon[,.(TotalPopulation=sum(`Tract Population, 2010`)),by = .(`Primary RUCA Code 2010`)]
+population_by_ruca <- data.table(merge(ruca1010_zip_code_ruca_description_table,population_by_code,by.x="PrimaryCode",by.y="Primary RUCA Code 2010"))
+```
+
+```{r}
+View(population_by_ruca)
+```
+
+Now let's group by rural/urban dichotomy: RUCA4-10 are considered rural; 1-3 are urban.
+
+```{r}
+population_by_ruca$RuralUrban <- ""
+population_by_ruca[PrimaryCode <=3,RuralUrban:="Urban"]
+population_by_ruca[PrimaryCode >=4,RuralUrban:="Rural"]
+population_by_ruca[,.(TotalPopulation=sum(TotalPopulation),proportion=sum(TotalPopulation)/sum(population_by_ruca$TotalPopulation)),RuralUrban]
+```
+

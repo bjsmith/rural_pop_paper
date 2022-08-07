@@ -1,0 +1,223 @@
+---
+title: "Power analysis"
+output: html_notebook
+---
+
+Measuring some correlations between values in order to estimate the number of qualtrics subjects we should have.
+
+I'm interested in the following IVs:
+
+ - Self Report Habit Index
+ - Eating Dysregulation Measure
+ - Food Craving Inventory [Healthy vs. Unehalthy food]
+ - IPAQ
+ 
+ and the following DVs:
+ 
+  - BMI
+  - Food Frequency Questionnaire
+  
+
+For FCI and FFQ we need to operationalize into healthy and unhealthy food.
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(rstatix)
+load("~/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/scored_data.RData")
+
+scored$score <- as.numeric(scored$score)
+```
+
+```{r}
+
+#
+scored %>% filter(scale_name %in% c("FCI")) %>% select(scored_scale) %>% unique
+
+```
+```{r}
+scored$scale_name %>% unique
+```
+
+
+Now get BMI
+
+```{r}
+load("../../../files/data/ppt_list_w_data.RData")
+ppt_bmi <- ppt_list_w_data %>% select(dev_id,bmi_0) %>% filter(!is.na(bmi_0))
+rm(ppt_list_w_data)
+
+```
+
+
+```{r}
+
+#iterate through each of our scales, and test their correlation with FCI and FFQ
+
+#scales where there's a promote-prevent
+promote_minus_prevent <- scored %>% 
+  #filter for FFQ
+  filter(scale_name %in% c("FFQ","FCI")) %>%
+  #filter for the two cols we're interested in
+  filter(scored_scale %in% c("cancer_promoting","cancer_preventing","craved_cancer_promoting","liked_cancer_promoting","craved_cancer_preventing","liked_cancer_preventing")) %>%
+  #throw it out wide
+  select(SID,scored_scale,score,survey_name,scale_name) %>% tidyr::pivot_wider(names_from = scored_scale,values_from = score) %>%
+  #create a composite measure
+  mutate("cancer_promoting_minus_preventing"=cancer_promoting-cancer_preventing,
+         "cancer_promoting_minus_preventing_craved"=craved_cancer_promoting-craved_cancer_preventing,
+         "cancer_promoting_minus_preventing_liked"=liked_cancer_promoting-liked_cancer_preventing
+         ) %>%
+  #wide across the surveys so that we can compare the surveys
+  select(scale_name,survey_name,SID,cancer_promoting_minus_preventing,cancer_promoting_minus_preventing_craved,cancer_promoting_minus_preventing_liked) %>% 
+  tidyr::pivot_wider(id_cols=c("SID","survey_name"),
+                     names_from=scale_name,
+                     values_from=c(
+    "cancer_promoting_minus_preventing",
+    "cancer_promoting_minus_preventing_craved",
+    "cancer_promoting_minus_preventing_liked")
+    )
+
+
+single_scale_values <- scored %>% 
+  #filter for FFQ
+  filter(scale_name %in% c("EDM","PLAN","MESA_HealthyFood")) %>%
+  #filter for the two cols we're interested in
+  #filter(scored_scale %in% c("mean")) %>%#unnecessary
+  #throw it out wide
+  select(SID,scored_scale,score,survey_name,scale_name) %>% tidyr::pivot_wider(names_from = scored_scale,values_from = score) %>%
+  #wide across the surveys so that we can compare the surveys
+  select(scale_name,survey_name,SID,mean) %>% 
+  tidyr::pivot_wider(id_cols=c("SID","survey_name"),
+                     names_from=scale_name,
+                     values_from=c("mean")
+    )
+
+#now merge these
+
+scales_wide<-merge(promote_minus_prevent,single_scale_values,by=c("SID","survey_name"),all=TRUE)
+
+ppt_data_wide <- merge(scales_wide,ppt_bmi,by.x="SID",by.y="dev_id",all=TRUE)
+
+```
+
+
+```{r}
+IVs <- c("cancer_promoting_minus_preventing_craved_FCI","cancer_promoting_minus_preventing_liked_FCI","EDM","PLAN","MESA_HealthyFood")
+DVs <- c("cancer_promoting_minus_preventing_FFQ","bmi_0")
+
+#now we estimate R^2....
+draw_names <- unique(ppt_data_wide$survey_name)
+
+for (DV in DVs){
+  for(IV in IVs){
+    for (dn in draw_names){
+      pairwise_not_na <- (is.na(ppt_data_wide %>% filter(survey_name==dn) %>% .[,IV])==FALSE) &  (is.na(ppt_data_wide %>% filter(survey_name==dn) %>% .[,DV])==FALSE)
+      if(sum(pairwise_not_na)>0){
+        print(paste0(DV,",", IV, " (",as.character(sum(pairwise_not_na)) , " values in ",dn,")"))
+          cor_res <-cor.test(
+            ppt_data_wide %>% filter(survey_name==dn) %>% .[,IV],
+            ppt_data_wide %>% filter(survey_name==dn) %>% .[,DV],
+            use = "complete.obs"
+          )
+          print(paste0("r value of ", as.character(cor_res$estimate)))
+          
+
+      }#else{
+        #print(paste("no valid column pair for:",IV,",", DV, " (",dn,")"))
+      #}
+   }
+  }
+}
+
+
+
+
+```
+
+
+## Across-surveys
+
+To do MESA, because it's in the ADOPT survey flow, we have to do it across surveys...
+
+```{r}
+IVs <- c("MESA_HealthyFood")
+DVs <- c("cancer_promoting_minus_preventing_FFQ","bmi_0")
+
+#now we estimate R^2....
+draw_names <- unique(ppt_data_wide$survey_name)
+
+for (DV in DVs){
+  for(IV in IVs){
+    for (dn_dv in draw_names){
+      for (dn_iv in draw_names){
+        dv_na <- (is.na(ppt_data_wide %>% filter(survey_name==dn_dv) %>% .[,DV])==FALSE)
+        iv_na <- (is.na(ppt_data_wide %>% filter(survey_name==dn_iv) %>% .[,IV])==FALSE)
+        
+        iv_data <- ppt_data_wide %>% filter(survey_name==dn_iv) %>% .[,c("SID",IV)]
+        dv_data <- ppt_data_wide %>% filter(survey_name==dn_dv) %>% .[,c("SID",DV)]
+        dv_iv_data <- merge(iv_data,dv_data,on="sid",all = FALSE)
+        pairwise_not_na <- sum(apply(is.na(dv_iv_data)==FALSE,1,all))
+        if(pairwise_not_na>0){
+          print(paste0(DV,"(",dn_dv,"),", IV, "(",dn_iv,") (",as.character(pairwise_not_na) , " values)"))
+            cor_res <-cor.test(
+              dv_iv_data[,IV],
+              dv_iv_data[,DV],
+              use = "complete.obs"
+            )
+            print(cor_res)
+          #print(paste0("r value of ", as.character(cor_res$estimate)))
+        }#else{
+        #print(paste("no valid column pair for:",DV,"(",dn_dv,"),", IV, "(",dn_iv,")"))
+      #}
+      }
+   }
+  }
+}
+
+
+
+
+```
+
+
+```{r}
+library(ggplot2)
+
+
+IVs <- c("MESA_HealthyFood")
+DVs <- c("cancer_promoting_minus_preventing_FFQ","bmi_0")
+
+#now we estimate R^2....
+draw_names <- unique(ppt_data_wide$survey_name)
+
+
+IV <- IVs[[1]]
+DV <- DVs[[1]]
+
+dn_dv<-"DEV Session 1 Surveys"
+dn_iv<-"DEV ADOPT Survey Flow"
+
+
+dv_na <- (is.na(ppt_data_wide %>% filter(survey_name==dn_dv) %>% .[,DV])==FALSE)
+iv_na <- (is.na(ppt_data_wide %>% filter(survey_name==dn_iv) %>% .[,IV])==FALSE)
+
+iv_data <- ppt_data_wide %>% filter(survey_name==dn_iv) %>% .[,c("SID",IV)]
+dv_data <- ppt_data_wide %>% filter(survey_name==dn_dv) %>% .[,c("SID",DV)]
+dv_iv_data <- merge(iv_data,dv_data,on="sid",all = FALSE)
+contains_not_null <- any(apply(is.na(dv_iv_data)==FALSE,1,all))
+
+print(paste0(DV,"(",dn_dv,"),", IV, "(",dn_iv,") (",as.character(nrow(dv_iv_data)) , " values)"))
+  cor_res <-cor.test(
+    dv_iv_data[,IV],
+    dv_iv_data[,DV],
+    use = "complete.obs"
+  )
+    print(cor_res)
+
+
+
+ggplot(dv_iv_data,aes_string(x=IV,y=DV))+geom_point()
+```
+
+
+

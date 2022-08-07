@@ -1,0 +1,195 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+```{r message=FALSE, warning=FALSE}
+Sys.setenv(R_CONFIG_ACTIVE = Sys.info()["nodename"])
+
+library(dplyr)
+library(lavaan)
+source("HINTS_preprocessing.R")
+hints5 <-get_hints5(location=config::get("hints_protected_data_folderpath"))
+boot_times<-10
+
+zscore <- function(x){
+    return((x-mean(x,na.rm=TRUE))/sd(x,na.rm=TRUE))
+}
+```
+
+```{r}
+table(hints5$GeneralHealth_of) %>% cumsum / sum(!is.na(hints5$GeneralHealth_of))
+
+hist(as.integer(hints5$GeneralHealth_of))
+```
+
+
+```{r}
+library(magrittr)
+library(dplyr)
+
+
+
+data_dir <- config::get("rural_data_dir")
+
+preprocessed_data_filepath <- paste0(data_dir,"cloudresearch_survey_results/orfcs_preprocessed2_anon_by_subj.csv")
+library(readr)
+library(ggplot2)
+library(GGally)
+orfcs_dataset <- readr::read_csv(preprocessed_data_filepath)
+
+orfcs_dataset$Education_Categorical<-factor(
+  orfcs_dataset$Education_Categorical,
+  #levels=3:9,
+  labels=c("No high school diploma",
+           "High school diploma/GED",
+           "Some college credit, no degree",
+           "Trade, technical, or vocational training",
+           "Associate's degree",
+           "Bachelor's degree",
+           "Master's, Professional, or doctoral degree")
+)
+
+orfcs_dataset$Education_Ordinal<-factor(
+  orfcs_dataset$Education_Categorical,ordered = TRUE
+)
+
+```
+
+
+Let's do our best to include all the same covariates we previously included
+
+#Rural disparities
+
+This just shows rural disparities in the outcome variables, without controlling for anything,
+
+
+```{r}
+library("ggpubr")
+
+ggplot(orfcs_dataset %>% filter(!is.na(RuralZIP)) %>% mutate(`Rural Status`=if_else(RuralZIP,"Rural","Non-rural"))
+         , aes(x=`Rural Status`, y=BMI,fill=`Rural Status`,color=`Rural Status`))+
+  geom_boxplot(alpha=0.2)+geom_jitter()+
+  labs(title="Oregon dataset: BMI by rural status")+
+  ggpubr::stat_compare_means(comparisons=list(c("Non-rural","Rural")),paired=FALSE,method="t.test",label = "p.signif")+
+  jtools::theme_apa()+coord_flip() 
+```
+```{r}
+rural_compare <- function(dataset, val_to_compare="BMI",rural_zip_raw="RuralZIP",main_title="Oregon dataset: BMI by rural status",alpha_val=0.1){
+  ggplot(dataset %>% filter(!is.na(!!sym(rural_zip_raw))) %>% mutate(rural_zip_bool=!!sym(rural_zip_raw)) %>% mutate(`Rural Status`=if_else(rural_zip_bool,"Rural","Non-rural"))
+         , aes_string(x="`Rural Status`", y=val_to_compare,color="`Rural Status`"
+                      ))+
+  geom_boxplot()+geom_jitter(alpha=alpha_val)+
+  labs(title=main_title)+
+  ggpubr::stat_compare_means(comparisons=list(c("Non-rural","Rural")),paired=FALSE,method="t.test",label = "p.signif")+
+  jtools::theme_apa()+coord_flip() 
+}
+
+rural_compare(orfcs_dataset)
+rural_compare(hints5,val_to_compare="BMI",rural_zip_raw="HINTSIsRural",main_title="National dataset: BMI by rural status",alpha_val=0.02)
+# rural_compare(hints5,val_to_compare="GeneralHealth_i",rural_zip_raw="HINTSIsRural",main_title="National dataset: BMI by rural status",alpha_val=0.02)
+# rural_compare(hints5,val_to_compare="MedConditions_HighBP",rural_zip_raw="HINTSIsRural",main_title="National dataset: BMI by rural status",alpha_val=0.02)
+```
+
+
+```{r}
+  ggplot(hints5 %>% filter(!is.na(HINTSIsRural) & MedConditions_HighBP %in% c("Yes", "No")) %>% mutate(`Rural Status`=if_else(HINTSIsRural,"Rural","Non-rural"))
+         , aes_string(x="`Rural Status`",fill="MedConditions_HighBP"))+
+  geom_bar(position = "fill") +
+  # stat_count(geom = "text", 
+  #            aes(label = paste(round((..count..)/sum(..count..)*100), "%")),
+  #            position=position_fill(vjust=0.5), colour="white")+
+  labs(title="National dataset: High blood pressure by rural status")+
+  scale_y_continuous(labels =  scales::percent_format())+
+  jtools::theme_apa()+coord_flip()
+
+
+# 
+# 
+#   labs(title="National dataset: High blood pressure by rural status")+
+#   ggpubr::stat_compare_means(comparisons=list(c("Non-rural","Rural")),paired=FALSE,method="t.test",label = "p.signif")#+
+#   #jtools::theme_apa()+coord_flip() 
+hbp_include <- hints5%>% filter(!is.na(HINTSIsRural) & MedConditions_HighBP %in% c("Yes", "No"))# %>% group_by(MedConditions_HighBP,HINTSIsRural) %>% summarize(count=n()) %>% tidyr::spread(HINTSIsRural,count)
+
+chisq.test(hbp_include$MedConditions_HighBP,hbp_include$HINTSIsRural)
+```
+
+
+
+```{r}
+hints5$`Self-rated health` <-
+  hints5$GeneralHealth %>% factor(levels = c("Poor","Fair","Good","Very good","Excellent"))
+
+  ggplot(hints5 %>% filter(!is.na(HINTSIsRural)) %>% mutate(`Rural Status`=if_else(HINTSIsRural,"Rural","Non-rural"))
+         , aes_string(x="`Rural Status`",fill="`Self-rated health`"))+
+  
+  geom_bar(position = "fill") +
+  # stat_count(geom = "text", 
+  #            aes(label = paste(round((..count..)/sum(..count..)*100), "%")),
+  #            position=position_fill(vjust=0.5), colour="white")+
+  scale_y_continuous(labels =  scales::percent_format()) +
+    scale_fill_brewer(palette="RdYlGn")+
+  jtools::theme_apa()+coord_flip() 
+
+t.test(
+  hints5 %>% filter(HINTSIsRural & !is.na(HINTSIsRural)) %>% select(GeneralHealth_i),
+  hints5 %>% filter(!HINTSIsRural & !is.na(HINTSIsRural)) %>% select(GeneralHealth_i)
+  )
+```
+
+
+
+```{r}
+
+hints5$`Number of Cardiometabolic conditions` <-
+  hints5$MedConditionsAggregate %>% factor(levels=c("3","2","1","0"))
+
+  ggplot(hints5 %>% filter(!is.na(HINTSIsRural)) %>% mutate(`Rural Status`=if_else(HINTSIsRural,"Rural","Non-rural"))
+         , aes_string(x="`Rural Status`",fill="`Number of Cardiometabolic conditions`"))+
+  
+  geom_bar(position = "fill") +
+  # stat_count(geom = "text", 
+  #            aes(label = paste(round((..count..)/sum(..count..)*100), "%")),
+  #            position=position_fill(vjust=0.5), colour="white")+
+  scale_y_continuous(labels =  scales::percent_format()) +
+    scale_fill_brewer(palette="RdYlGn")+
+  labs(title="National dataset: Number of cardiometabolic conditions by rural status")+
+  jtools::theme_apa()+coord_flip()  + theme(legend.position="bottom")
+
+
+ wilcox.test(
+  hints5 %>% filter(HINTSIsRural & !is.na(HINTSIsRural)) %>% select(MedConditionsAggregate) %>% unlist(),
+  hints5 %>% filter(!HINTSIsRural & !is.na(HINTSIsRural)) %>% select(MedConditionsAggregate) %>% unlist(),
+  conf.int = TRUE
+  )
+
+```
+
+
+
+
+
+```{r}
+
+  ggplot(hints5 %>% filter(!is.na(HINTSIsRural) & EverHadCancer %in% c("Yes", "No")) %>% mutate(`Rural Status`=if_else(HINTSIsRural,"Rural","Non-rural"))
+         , aes_string(x="`Rural Status`",fill="EverHadCancer"))+
+  geom_bar(position = "fill") +
+  # stat_count(geom = "text", 
+  #            aes(label = paste(round((..count..)/sum(..count..)*100), "%")),
+  #            position=position_fill(vjust=0.5), colour="white")+
+  labs(title="National dataset: Ever had cancer by rural status")+
+  scale_y_continuous(labels =  scales::percent_format())+
+  jtools::theme_apa()+coord_flip()
+
+#   #jtools::theme_apa()+coord_flip() 
+chsqdata_include <- hints5%>% filter(!is.na(HINTSIsRural) & EverHadCancer %in% c("Yes", "No"))
+
+
+chisq.test(chsqdata_include$EverHadCancer,chsqdata_include$HINTSIsRural)
+
+```
+
+

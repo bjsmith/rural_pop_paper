@@ -1,0 +1,204 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+RUCA Codes classify Census Tracts by their level of commuting (urban vs. rural).
+
+More information is here:
+
+https://www.ers.usda.gov/data-products/rural-urban-commuting-area-codes/documentation/
+
+You can _approximate_ these by classifying ZIP Codes by the census tracts within them, thus assigning a RUCA code to each  ZIP Code. the USDA provides a dataset in which this has been done.
+
+These aren't definitive and shouldn't be used for final classification, but they're a useful first pass.
+
+This document takes our subjects and classifies them based on the RUCA.
+
+```{r}
+cwd<-getwd()
+
+data_dir <- "/Users/benjaminsmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/"
+
+setwd(data_dir)
+
+source("DEV-RuralVsUrbanDataExam_R_2021-05-07_1824.r")
+
+data_dir <- "/Users/benjaminsmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/"
+
+#setwd(cwd)
+```
+
+```{r}
+#let's use good old data.table, I miss it
+library(data.table)
+library(dplyr)
+
+dev2_ru_dt_all_sessions<- data.table(data)
+
+dev2_ru_session01 <- dev2_ru_dt_all_sessions[redcap_event_name %in% c("session_0_arm_1","t1_arm_1","session_1_arm_1")]
+
+
+
+```
+
+Let's get some participant information....
+
+
+```{r}
+ppt_id <- c("dev_id","date_0","address","birthsex","dob","race___1","race___2","race___3","race___4","race___5","race___6","race___7","race___8","age")
+#only store info relevant to participant ID
+participant_list_raw <- dev2_ru_session01[,ppt_id,with=FALSE]
+#now remove missing data columns
+blank_by_row <- rowSums(is.na(participant_list_raw))+rowSums(participant_list_raw=="",na.rm = TRUE)
+#remove rows with the least amount of information
+ppt_list_clean.1 <- participant_list_raw[blank_by_row<max(blank_by_row)]
+ppt_list_clean <- ppt_list_clean.1[stringr::str_detect(ppt_list_clean.1$dev_id,"DEV\\d\\d\\d") & ppt_list_clean.1$dob!="",]
+
+```
+
+
+Great. Now let's get zipcodes for the participants
+
+
+```{r}
+#https://www.oreilly.com/library/view/regular-expressions-cookbook/9781449327453/ch04s14.html
+ppt_list_clean$ZIPCode <- stringr::str_extract(trimws(ppt_list_clean$address),"[0-9]{5}(?:-[0-9]{4})?$")
+#We have to remove participants where we didn't have addresses.
+ppt_list_clean <- ppt_list_clean[!is.na(ppt_list_clean$address) & ppt_list_clean$address!=""]
+
+#manually add a couple of zipcodes that were entered incorrectly but can be human-deduced
+source(paste0(data_dir,"manual_tag_zipcodes.R"))
+
+#remove entries where we really can't tag a zip, even manually.
+ppt_list_clean <- ppt_list_clean[!is.na(ZIPCode)]
+
+rm(ppt_list_clean.1)
+rm(participant_list_raw)
+```
+
+
+
+Now we want to get the RUCA codes.
+
+```{r}
+ruca2010_zip_code_descriptions <- readxl::read_xlsx(paste0(data_dir , "RUCA2010zipcode.xlsx" ),sheet = 1)
+ruca2010_zip_codes <- readxl::read_xlsx(paste0(data_dir , "RUCA2010zipcode.xlsx" ),sheet = "Data")
+ruca2010_zip_codes_details <- readxl::read_xlsx(paste0(data_dir , "RUCA2010zipcode.xlsx" ),sheet = "RUCA code description")
+ruca1010_zip_code_ruca_description_table <- readr::read_csv(paste0(data_dir,"RUCA2010zipcode_primary_code_key.csv"))
+```
+
+Now, match the participant ZIP Codes to the RUCA 2010
+
+```{r}
+ppts_with_zip_ruca <- merge(ppt_list_clean,ruca2010_zip_codes,by.x="ZIPCode",by.y="ZIP_CODE",all.x=TRUE,all.y=FALSE)
+ppts_with_zip_ruca <- merge(ppts_with_zip_ruca,ruca1010_zip_code_ruca_description_table, by.x="RUCA1",by.y="PrimaryCode")
+#View(ppts_with_zip_ruca)
+
+
+
+```
+
+The research objectives of the [grant](https://grants.nih.gov/grants/guide/rfa-files/RFA-CA-20-051.html) say:
+
+> The purpose of this FOA is to solicit applications to develop, adapt, and test individual-, community- or multilevel interventions to address modifiable risk factors for cancer in rural populations, as defined by USDA Rural-Urban Continuum Codes (RUCC) 4-9, Rural-Urban Commuting Area (RUCA) codes 4-10, or Frontier and Remote (FAR) areas level 4.
+
+So which subjects do we have at levels 4-10? Based on ZIP Code, we have
+
+```{r}
+ppts_with_zip_ruca$ClassifiedRural <- ppts_with_zip_ruca$RUCA1>=4
+```
+
+
+```{r}
+table(ppts_with_zip_ruca$Description)
+```
+
+```{r}
+table(ppts_with_zip_ruca$ClassifiedRural)
+```
+
+
+
+So we have 10 RUCA-ZipCode-classified rural participants.
+
+
+So what we need to do now is just double-check these 10 to see if they are in fact rural. We can do this by looking up their addresses and obtaining their census tracts manually with the web tool here: https://geomap.ffiec.gov/FFIECGeocMap/GeocodeMap1.aspx. Or use the `get_census_tract_for_ppt.Rmd` batch tool, but it's not very reliable.
+
+
+```{r}
+zip_ruca_ppts_classified_rural <- ppts_with_zip_ruca[ClassifiedRural==TRUE,]
+zip_ruca_ppts_classified_rural$address_matcher_id <- sample(nrow(zip_ruca_ppts_classified_rural)*1000,size=nrow(zip_ruca_ppts_classified_rural),replace=FALSE)
+readr::write_csv(
+  zip_ruca_ppts_classified_rural[,.(address_matcher_id,address)],
+  paste0(data_dir,"participant_addys_to_manually_classify.csv")
+)
+```
+
+
+
+Import them back in
+
+```{r}
+rural_participants <-data.table(readxl::read_xlsx(paste0(data_dir,"participant_addys_to_manually_classify.xlsx")))
+zip_ruca_ppts_classified_rural_w_fips <- merge(zip_ruca_ppts_classified_rural,rural_participants[,-"address",with=FALSE],by="address_matcher_id")
+```
+
+And then match with th tract
+
+
+Then, we look up the census tracts in the definitive `ruca2010revised.xlsx` and confirm that these are rural participants.
+
+```{r}
+readxl::excel_sheets(paste0(data_dir,"ruca2010revised.xlsx"))
+
+ruca_2010_revised <- data.table(readxl::read_xlsx(paste0(data_dir,"ruca2010revised.xlsx"),sheet="Data",skip = 1))
+```
+
+
+
+```{r}
+#remove address, and remove some tables we don't need anymore
+#ppt_list_clean$address <- NULL
+zip_ruca_ppts_classified_rural_w_fips_ruca <- merge(zip_ruca_ppts_classified_rural_w_fips,ruca_2010_revised,
+                                                    by.x="State-County-Tract FIPS Code",
+                                                    by.y="State-County-Tract FIPS Code (lookup by address at http://www.ffiec.gov/Geocode/)",
+                                                    all.x=TRUE,all.y=FALSE)
+
+
+
+```
+
+
+```{r}
+zip_ruca_ppts_classified_rural_w_fips$`State-County-Tract FIPS Code`
+```
+
+
+```{r}
+ruca_2010_revised[
+  grep("^41053",`State-County-Tract FIPS Code (lookup by address at http://www.ffiec.gov/Geocode/)`),
+]$`State-County-Tract FIPS Code (lookup by address at http://www.ffiec.gov/Geocode/)`
+```
+
+
+```{r}
+zip_ruca_ppts_classified_rural_w_fips_ruca_2<-rename(zip_ruca_ppts_classified_rural_w_fips_ruca,ZIPCodeRUCA1=RUCA1)
+
+```
+```{r}
+zip_ruca_ppts_classified_rural_w_fips_ruca_2
+```
+
+Now save the information with minimal identifying information
+
+```{r}
+zip_ruca_ppts_classified_rural_w_fips_ruca_2[,.(dev_id,`State-County-Tract FIPS Code`,ZIPCodeRUCA1,`Primary RUCA Code 2010`,`Secondary RUCA Code, 2010 (see errata)`,`Tract Population, 2010`,`Land Area (square miles), 2010`,`Population Density (per square mile), 2010`)] %>%
+  readr::write_csv(paste0(data_dir,"rural_participants_in_dev.csv"))
+```
+
+
+```{bash}
+```
+
+

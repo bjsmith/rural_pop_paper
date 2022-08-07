@@ -1,0 +1,340 @@
+---
+title: "Rural environment Paper"
+output:
+  html_document:
+    df_print: paged
+---
+
+This is a close look at the rurality, BMI, food availability mediation relationship:
+
+ - How does it change when we add PSS_z?
+ - How does it change when we change the racial categorization?
+ - How does it change when we add `I(DEMO_age_c)`?
+
+
+# Setup
+
+```{r}
+library(stringr)
+library(rstatix)
+library(foreign)
+library(stringr)
+library(dplyr)
+library(ggplot2)
+library(data.table)
+```
+
+## Setup the ORFCS dataset
+
+
+```{r}
+library(magrittr)
+library(dplyr)
+
+
+
+data_dir <- "/Users/benjaminsmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/"
+
+preprocessed_data_filepath <- paste0(data_dir,"cloudresearch_survey_results/orfcs_preprocessed_anon_by_subj.csv")
+library(readr)
+library(ggplot2)
+library(GGally)
+preprocessed_data_raw <- readr::read_csv(preprocessed_data_filepath)
+
+
+rows_to_remove <- ((preprocessed_data_raw$EDM_forwardscore<2 & preprocessed_data_raw$EDM_reversescored>4) |
+  (preprocessed_data_raw$EDM_forwardscore>=4.5 & preprocessed_data_raw$EDM_reversescored<2))
+rows_to_remove[is.na(rows_to_remove)]<-FALSE
+sum(rows_to_remove)
+sub_ids_to_remove <- preprocessed_data_raw[rows_to_remove,"SID"]
+preprocessed_data <- preprocessed_data_raw %>% filter((SID %in% unlist(sub_ids_to_remove))==FALSE)
+preprocessed_data$BMI_c <- preprocessed_data$BMI - mean(preprocessed_data$BMI,na.rm=TRUE)
+
+preprocessed_data$DEMO_Age_c <- preprocessed_data$DEMO_Age-38 #using U.S. median age
+
+preprocessed_data$RaceCategorical<-factor(preprocessed_data$RaceCategorical,levels=unique(preprocessed_data$RaceCategorical))
+
+preprocessed_data$RuralZIP_i <- as.numeric(preprocessed_data$RuralZIP)
+preprocessed_data$RaceC2 <- as.character(preprocessed_data$RaceCategorical)
+preprocessed_data$RaceC2[preprocessed_data$RaceC2=="RaceNotReported"] <- "OtherRaceRaceNotReported"
+preprocessed_data$RaceC2[preprocessed_data$RaceC2=="OtherRace"] <- "OtherRaceRaceNotReported"
+preprocessed_data$RaceC2 <-factor(preprocessed_data$RaceC2,levels=names(sort(table(preprocessed_data$RaceC2),decreasing=TRUE)))
+preprocessed_data$RaceC2 <- preprocessed_data$RaceC2
+
+#need to remove this one data point for data quality issue.
+preprocessed_data[!is.na(preprocessed_data$WEIGHT) & preprocessed_data$WEIGHT>500,c("WEIGHT","WEIGHT_kg","BMI")] <- NA
+rm(preprocessed_data_raw)
+
+zscore <- function(x){
+  return((x-mean(x,na.rm=TRUE))/sd(x,na.rm=TRUE))
+}
+
+preprocessed_data$FFQ_fruits_ln_z <- as.numeric(preprocessed_data$FFQ_fruits) %>% log %>% zscore
+preprocessed_data$FFQ_vegetables_ln_z <- as.numeric(preprocessed_data$FFQ_vegetables) %>% log %>% zscore
+preprocessed_data$FFQ_fruit_vegetables_z <- (as.numeric(preprocessed_data$FFQ_fruits) + as.numeric(preprocessed_data$FFQ_vegetables)) %>% log %>% zscore
+
+
+
+#11 is doctoral degree; 12+ are "other" and "decline to answer"
+preprocessed_data$DEMO_4[preprocessed_data$DEMO_4>11]<-NA
+
+preprocessed_data$Education_Categorical <- preprocessed_data$DEMO_4
+preprocessed_data$Education_Categorical <- preprocessed_data$DEMO_4
+preprocessed_data$Education_Categorical[preprocessed_data$DEMO_4<3] <- 3 #very few under three so we'll move them up
+#very few over 9, so we move them down
+preprocessed_data$Education_Categorical[preprocessed_data$DEMO_4>9] <- 9
+#now add descriptors
+preprocessed_data$Education_Categorical<-factor(
+  preprocessed_data$Education_Categorical,
+  levels=3:9,
+  labels=c("No high school diploma",
+           "High school diploma/GED",
+           "Some college credit, no degree",
+           "Trade, technical, or vocational training",
+           "Associate's degree",
+           "Bachelor's degree",
+           "Master's, Professional, or doctoral degree")
+)
+
+
+
+orfcs_dataset<-preprocessed_data
+```
+
+```{r}
+#put self-report items in z-score. It wont' change the estimate but it will make it easier to interpret
+
+orfcs_dataset %<>% 
+  mutate(
+    MESA_healthyfoodavailability_z =zscore(MESA_healthyfoodavailability),
+    MESA_safetyfromcrime_z =zscore(MESA_safetyfromcrime),
+    PSS_z = zscore(PSS_sum),
+    cancer_promoting_minus_preventing_FFQ_z = zscore(cancer_promoting_minus_preventing_FFQ),
+    DEMO_Age_c = DEMO_Age - mean(DEMO_Age,na.rm=TRUE), #center age, but do not z-score it.
+    aSES_02_z = zscore(aSES_02)
+  )
+
+```
+
+```{r}
+#https://www.rdocumentation.org/packages/mediation/versions/4.5.0/topics/mediate
+library(mediation)
+boot_times = 10000 # set this to 10000 for final analysis, and 100 for setting up
+```
+
+#Findings
+
+## Pre-registered: A rural-urban BMI (and FFQ???) difference in Oregon, controlling for demographics
+
+
+```{r}
+
+
+predict_bmi_rural <- lm(BMI~RuralZIP+
+                    #MESA_healthyfoodavailability+MESA_safetyfromcrime
+                      PSS_z+
+                    DEMO_Age_c+Gender3C+RaceC2,
+                  orfcs_dataset)
+summary(predict_bmi_rural)
+
+
+```
+
+
+How does this look when including the quadratic term for age?
+
+```{r}
+predict_bmi_rural <- lm(BMI~RuralZIP+
+                    #MESA_healthyfoodavailability+MESA_safetyfromcrime
+                      PSS_z+
+                    DEMO_Age_c+I(DEMO_Age_c^2)+Gender3C+RaceC2,
+                  orfcs_dataset)
+summary(predict_bmi_rural)
+
+```
+
+
+
+## Pre-registered: food availability mediates BMI-rurality relationship
+
+```{r}
+hist(data_to_measure$MESA_healthyfoodavailability_z)
+```
+
+
+```{r}
+
+library(mediation)
+
+data_to_measure <- orfcs_dataset %>% filter(!is.na(BMI) & Gender3C %in% c("Male","Female"))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(MESA_healthyfoodavailability_z~RuralZIP+Gender3C+DEMO_Age_c+RaceC2+PSS_z,data_to_measure)
+mc <- lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+RaceC2+MESA_healthyfoodavailability_z+PSS_z,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=boot_times, treat="RuralZIP",mediator="MESA_healthyfoodavailability_z")
+summary(mediate_result)
+```
+
+### Using RobustSE instead
+
+
+```{r}
+
+library(mediation)
+
+data_to_measure <- orfcs_dataset %>% filter(!is.na(BMI) & Gender3C %in% c("Male","Female"))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(MESA_healthyfoodavailability_z~RuralZIP+Gender3C+DEMO_Age_c+RaceC2+PSS_z,data_to_measure)
+mc <- lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+RaceC2+MESA_healthyfoodavailability_z+PSS_z,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=boot_times, robustSE=TRUE, treat="RuralZIP",mediator="MESA_healthyfoodavailability_z")
+summary(mediate_result)
+```
+### Using non-parametric bootstrap
+
+Default is a quasi-Bayesian approximation for confidence intervals. If anything this will probably require more sims but it might be more robust. This is probably the preferred way to go...
+
+```{r}
+
+library(mediation)
+
+data_to_measure <- orfcs_dataset %>% filter(!is.na(BMI) & Gender3C %in% c("Male","Female"))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(MESA_healthyfoodavailability_z~RuralZIP_i+Gender3C+DEMO_Age_c+RaceC2+PSS_z,data_to_measure)
+mc <- lm(BMI~RuralZIP_i+Gender3C+DEMO_Age_c+RaceC2+MESA_healthyfoodavailability_z+PSS_z,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=boot_times, boot=TRUE, treat="RuralZIP_i",mediator="MESA_healthyfoodavailability_z")
+summary(mediate_result)
+```
+Still doesn't yield us the result we're looking for, though.
+
+How much variation is there? 
+
+### Repeating the above twice
+
+
+```{r}
+
+library(mediation)
+
+data_to_measure <- orfcs_dataset %>% filter(!is.na(BMI) & Gender3C %in% c("Male","Female"))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(MESA_healthyfoodavailability_z~RuralZIP_i+Gender3C+DEMO_Age_c+RaceC2+PSS_z,data_to_measure)
+mc <- lm(BMI~RuralZIP_i+Gender3C+DEMO_Age_c+RaceC2+MESA_healthyfoodavailability_z+PSS_z,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=boot_times, boot=TRUE, treat="RuralZIP_i",mediator="MESA_healthyfoodavailability_z")
+summary(mediate_result)
+```
+
+
+```{r}
+
+library(mediation)
+
+data_to_measure <- orfcs_dataset %>% filter(!is.na(BMI) & Gender3C %in% c("Male","Female"))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(MESA_healthyfoodavailability_z~RuralZIP_i+Gender3C+DEMO_Age_c+RaceC2+PSS_z,data_to_measure)
+mc <- lm(BMI~RuralZIP_i+Gender3C+DEMO_Age_c+RaceC2+MESA_healthyfoodavailability_z+PSS_z,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=boot_times, boot=TRUE, treat="RuralZIP_i",mediator="MESA_healthyfoodavailability_z")
+summary(mediate_result)
+```
+
+
+### Use bias-corrected and accelerated confidence intervals
+
+What if we used a different kind of boot CI type?
+https://blog.methodsconsultants.com/posts/understanding-bootstrap-confidence-interval-output-from-the-r-boot-package/
+
+
+```{r}
+
+library(mediation)
+
+data_to_measure <- orfcs_dataset %>% filter(!is.na(BMI) & Gender3C %in% c("Male","Female"))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(MESA_healthyfoodavailability_z~RuralZIP_i+Gender3C+DEMO_Age_c+RaceC2+PSS_z,data_to_measure)
+mc <- lm(BMI~RuralZIP_i+Gender3C+DEMO_Age_c+RaceC2+MESA_healthyfoodavailability_z+PSS_z,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=boot_times, boot=TRUE, boot.ci.type = "bca", treat="RuralZIP_i",mediator="MESA_healthyfoodavailability_z")
+summary(mediate_result)
+```
+
+
+
+### adding quadratic term for age....
+
+```{r}
+
+library(mediation)
+
+data_to_measure <- orfcs_dataset %>% filter(!is.na(BMI) & Gender3C %in% c("Male","Female"))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(MESA_healthyfoodavailability_z~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceC2+PSS_z,data_to_measure)
+mc <- lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceC2+MESA_healthyfoodavailability_z+PSS_z,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=boot_times, treat="RuralZIP",mediator="MESA_healthyfoodavailability_z")
+summary(mediate_result)
+```
+
+### Removing the PSS_z
+
+
+
+```{r}
+
+library(mediation)
+
+data_to_measure <- orfcs_dataset %>% filter(!is.na(BMI) & Gender3C %in% c("Male","Female"))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(MESA_healthyfoodavailability_z~RuralZIP+Gender3C+DEMO_Age_c+RaceC2,data_to_measure)
+mc <- lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+RaceC2+MESA_healthyfoodavailability_z,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=boot_times, treat="RuralZIP",mediator="MESA_healthyfoodavailability_z")
+summary(mediate_result)
+```
+This may be an improvement...
+
+### using old Racial Categorization
+
+```{r}
+
+library(mediation)
+
+data_to_measure <- orfcs_dataset %>% filter(!is.na(BMI) & Gender3C %in% c("Male","Female"))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(MESA_healthyfoodavailability_z~RuralZIP+Gender3C+DEMO_Age_c+RaceCategorical+PSS_z,data_to_measure)
+mc <- lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+RaceCategorical+MESA_healthyfoodavailability_z+PSS_z,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=boot_times, treat="RuralZIP",mediator="MESA_healthyfoodavailability_z")
+summary(mediate_result)
+```
+
+None of that really seems to make a difference--it's just luck of the draw. 

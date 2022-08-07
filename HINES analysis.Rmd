@@ -1,0 +1,85 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+hines_location <- "/Users/benjaminsmith/Google Drive/oregon/data/protected_HINTS_data/HINTS5_Cycle4_SPSS_20210309/hints5_cycle4_public.sav"
+library(foreign)
+library(dplyr)
+```
+
+```{r}
+hines_2020_raw<-read.spss(hines_location, use.value.label=TRUE,to.data.frame=TRUE)
+```
+
+
+```{r}
+#preprocess
+hines_2020<-hines_2020_raw
+hines_2020$Age <- as.numeric(as.character(hines_2020$Age))
+hines_2020$BMI <- as.numeric(as.character(hines_2020$BMI))
+```
+```{r}
+hist(hines_2020$Age)
+```
+```{r}
+hist(hines_2020$BMI)
+```
+
+```{r}
+summary(hines_2020$BirthGender)
+```
+```{r}
+hines_2020$HINESIsRural <- hines_2020$PR_RUCA_2010!="Metropolitan"
+```
+
+
+So we repeat the analysis we did previously.
+```{r}
+table(data_to_measure$Race_Cat2)
+```
+```{r}
+Race_Cat2_levels <- levels(hines_2020$Race_Cat2)
+table(hines_2020$Race_Cat2)
+Race_Cat2_levels_reordered <- c(Race_Cat2_levels[2],Race_Cat2_levels[1],Race_Cat2_levels[3:length(Race_Cat2_levels)])
+
+hines_2020$Race_Cat2_ro <- factor(as.character(hines_2020$Race_Cat2),Race_Cat2_levels_reordered)
+```
+
+```{r}
+table(hines_2020$Race_Cat2_ro)
+```
+## Women
+
+```{r}
+data_to_measure <- hines_2020 %>% 
+  filter(BirthGender=="Female")
+
+summary(lm(BMI~Age+HINESIsRural+Race_Cat2_ro,data_to_measure))
+  
+```
+
+Thisi s broadly consistent with my finding--rurality isn't explanatory. 
+
+
+## Men
+
+
+```{r}
+data_to_measure <- hines_2020 %>% 
+  filter(BirthGender=="Male")
+
+table(data_to_measure$HINESIsRural)
+
+summary(lm(BMI~Age+HINESIsRural+Race_Cat2_ro,data_to_measure))
+summary(lm(BMI~Age+HINESIsRural,data_to_measure))
+  
+```
+
+So that's interesting....
+
+```{r}
+data_to_measure %>% group_by(BirthGender) %>% summary(.$BMI)
+```
+

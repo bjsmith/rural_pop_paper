@@ -1,0 +1,181 @@
+---
+title: "Defining rural"
+output: html_notebook
+---
+
+
+
+```{r}
+library(dplyr)
+cwd<-getwd()
+
+data_dir <- "/Users/benjaminsmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/"
+
+setwd(data_dir)
+
+
+#setwd(cwd)
+```
+
+The RFA specifies that the following would be disqualifying:
+
+> Applications that do not clearly define the rural population(s) in which they will conduct the intervention research using one or more of the following: USDA Rural-Urban Continuum Codes (RUCC) 4-9, Rural-Urban Commuting Area (RUCA) codes 4-10, or Frontier and Remote (FAR) areas level 4.
+
+So we need to do two things:
+
+ (1) Decide which of these codes we will use to define "rural"
+ (2) Define the population we will measure in terms of these codes.
+ 
+RUCC codes are defined at the county level, but RUCA codes are defined at the census tract level.
+
+## Counties within a reasonable distanct to UO:
+
+The following is a list of counties with at least one location less than 90 minutes drive to the University of Oregon
+ - Lane County
+  - Linn County - 25 minutes drive to Harrisburg
+ - Douglas County - 31 minutes to Linton
+ - Benton - 36 minutes to Monroe at the edge of Benton County
+ - Marion County - 50 minutes drive to Jefferson at the edge of Marion County
+ - Polk County - about 70 minutes to the edge of polk county
+  - Klamath County - 85 minutes to Crecent Lake Junction
+ 
+
+ The following is a list of counties 90 to 120 minutes drive to UO:
+ 
+ - Lincoln County -- About 84 minutes drive to the edge of the county
+ - Deschutes County - 117 minutes to the edge of Deschutes County (Black Butte Ranch)
+ - Josephine County - 110 minutes to Wolf Creek
+ - Coos County
+ - Jefferson County - 107 minutes to Suttle Lake
+ - Clackamas County -  94 minutes to Marquam
+ - Yamhill County - 92 minutes drive to Amity
+ - Tillamook County - 108 minutes drive
+ 
+ The following is an incomplete list of counties greater than 2 hours distance:
+ 
+ - Jackson County: Shady Cove at 2 hours 38 minutes is the closest I could find.
+ - Curry County: Langlois at 2 hours 49 minutes
+ - Lake County (Fort Rock, 2:38)
+ - 
+ 
+
+
+## RUCC codes
+
+```{r}
+library(readxl)
+
+
+rucc2013<-readxl::read_xls(paste0(data_dir,"ruralurbancodes2013.xls"),sheet="Rural-urban Continuum Code 2013")
+
+rucc2013_codes_list <- rucc2013 %>% select(RUCC_2013,Description) %>% arrange(. , RUCC_2013) %>% unique
+rucc2013_codes_list
+```
+
+This list is by County; let's get the counties we are interested in - let's say counties within 90 minutes driving distance. will include Yamhill which is just outside the distance.
+
+
+```{r}
+library(kableExtra)
+rucc2013_or <- rucc2013 %>% filter(State=="OR")
+
+nonmetro_counties_of_interest <- c("Linn County","Douglas County","Benton County", "Marion County","Polk County","Klamath County")
+all_counties_of_interest <- c("Lane County",nonmetro_counties_of_interest)
+rucc2013_or %>% 
+  knitr::kable() %>%
+  kable_styling() %>%
+  row_spec(which(rucc2013_or$County_Name %in% nonmetro_counties_of_interest), background="#ccccff")
+```
+
+So what about the other ones...let's look at RUCA
+
+```{r}
+#get the FIPS code for the counties
+county_of_interest_fips <- rucc2013_or %>% filter(County_Name %in% all_counties_of_interest) %>% .$FIPS %>% as.integer()
+```
+
+
+## RUCA
+
+https://www.ers.usda.gov/data-products/rural-urban-commuting-area-codes.aspx
+
+
+
+```{r}
+ruca2010_2019_revised<-readxl::read_xlsx(paste0(data_dir,"ruca2010revised.xlsx"),sheet="Data",skip = 1)
+tracts_in_relevant_counties <- ruca2010_2019_revised %>% filter(`State-County FIPS Code` %in% county_of_interest_fips)
+
+
+
+
+```
+
+
+```{r}
+tracts_in_relevant_counties %>% group_by(`State-County FIPS Code`) %>% summarise(CountyTypes=paste(sort(unique(`Primary RUCA Code 2010`)),collapse=", "))
+tracts_in_relevant_counties %>% group_by(`State-County FIPS Code`, `Select County`) %>% summarise(CountyTypes=paste(sort(unique(`Secondary RUCA Code, 2010 (see errata)`)),collapse=", "))
+```
+
+How many people are in rural census tracts in each county?
+
+```{r}
+tracts_in_relevant_counties %>% group_by(`State-County FIPS Code`) %>% 
+  summarise(
+    PrimaryRUCACodes=paste(sort(unique(`Primary RUCA Code 2010`)),collapse=", "),
+    SecondaryRUCACodes=paste(sort(unique(`Secondary RUCA Code, 2010 (see errata)`)),collapse=", "),
+    )
+
+```
+
+```{r}
+population_counts <- tracts_in_relevant_counties %>% group_by(`State-County FIPS Code`,`Select County`,`Primary RUCA Code 2010`) %>% 
+  summarise(TotalPopulation = sum(`Tract Population, 2010`))
+
+population_counts%>% kable()
+```
+
+How many people in each county are in qualifying tracts?
+
+Qualifying tracts have RUCA codes 4-10.
+
+```{r}
+rural_pop <- tracts_in_relevant_counties %>% filter(`Primary RUCA Code 2010`>=4 &  `Primary RUCA Code 2010`<=10) %>% 
+  group_by(`State-County FIPS Code`,`Select County`) %>% 
+  summarise(`Total Rural Population` = sum(`Tract Population, 2010`))
+
+non_rural_pop <- tracts_in_relevant_counties %>% filter(`Primary RUCA Code 2010`<4) %>% 
+  group_by(`State-County FIPS Code`,`Select County`) %>% 
+  summarise(`Total Nonrural Population` = sum(`Tract Population, 2010`))
+
+pop_by_rurality <- merge(rural_pop,non_rural_pop,all=TRUE)
+
+pop_by_rurality %>% kable(digits = 3, format.args = list(big.mark = ",", 
+  scientific = FALSE))
+```
+
+If we specify counties with locations 60 minutes or less from campus, we get our original four. That's probably good enough, and saves us from reaching out to more counties for the time being.
+
+
+## Look at all Oregon counties for the online survey
+
+
+
+```{r}
+ruca2010_zip_code_descriptions <- readxl::read_xlsx(paste0(data_dir , "RUCA2010zipcode.xlsx" ),sheet = 1)
+ruca2010_zip_codes <- readxl::read_xlsx(paste0(data_dir , "RUCA2010zipcode.xlsx" ),sheet = "Data")
+ruca2010_zip_codes_details <- readxl::read_xlsx(paste0(data_dir , "RUCA2010zipcode.xlsx" ),sheet = "RUCA code description")
+ruca1010_zip_code_ruca_description_table <- readr::read_csv(paste0(data_dir,"RUCA2010zipcode_primary_code_key.csv"))
+
+ruca_2010_revised <- data.table(readxl::read_xlsx(paste0(data_dir,"ruca2010revised.xlsx"),sheet="Data",skip = 1))
+```
+```{r}
+oregon_zip_codes <- ruca2010_zip_codes %>% filter(STATE=="OR")
+oregon_zip_codes$RUClassification <- ""
+oregon_zip_codes$RUClassification[oregon_zip_codes$RUCA1<4] <- "Urban"
+oregon_zip_codes$RUClassification[oregon_zip_codes$RUCA1>=4] <- "Rural"
+```
+
+
+```{r}
+oregon_zip_codes%>% select(ZIP_CODE,STATE,RUCA1,RUClassification) %>% readr::write_csv(paste0(data_dir , "oregon_zip_code_list.csv")
+```

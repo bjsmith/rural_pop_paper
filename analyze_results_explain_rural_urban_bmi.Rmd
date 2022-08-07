@@ -1,0 +1,1690 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+Purpose of this document: try to explain in an exploratory manner the rural-urban divide in BMI.
+
+Past analysis has shown gender to be very important so I'm going to do analyses separately for Male and Female sex groups.
+
+We'll start with a set of explanatory variables in which a difference in female sex urban-rural BMI exists, then show what can explain it, then show how nothing can explain the male urban-rural gap.
+
+CAN use FFQ but keep in mind that it's preliminary until we get the better design from Megan.
+
+
+```{r}
+
+library(magrittr)
+library(dplyr)
+
+```
+
+
+```{r}
+data_dir <- "/Users/benjaminsmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/"
+
+preprocessed_data_filepath <- paste0(data_dir,"cloudresearch_survey_results/orfcs_preprocessed_anon_by_subj.csv")
+library(readr)
+library(ggplot2)
+library(GGally)
+preprocessed_data_raw <- readr::read_csv(preprocessed_data_filepath)
+
+
+```
+
+
+
+```{r}
+rows_to_remove <- ((preprocessed_data_raw$EDM_forwardscore<2 & preprocessed_data_raw$EDM_reversescored>4) |
+  (preprocessed_data_raw$EDM_forwardscore>=4.5 & preprocessed_data_raw$EDM_reversescored<2))
+rows_to_remove[is.na(rows_to_remove)]<-FALSE
+sum(rows_to_remove)
+sub_ids_to_remove <- preprocessed_data_raw[rows_to_remove,"SID"]
+preprocessed_data <- preprocessed_data_raw %>% filter((SID %in% unlist(sub_ids_to_remove))==FALSE)
+
+preprocessed_data[!is.na(preprocessed_data$WEIGHT) & preprocessed_data$WEIGHT>500,c("WEIGHT","WEIGHT_kg","BMI")] <- NA
+preprocessed_data[!is.na(preprocessed_data$DEMO_Age) & preprocessed_data$DEMO_Age>100,c("DEMO_Age")] <- NA
+preprocessed_data[!is.na(preprocessed_data$DEMO_Age) & preprocessed_data$DEMO_Age<18,c("DEMO_Age")] <- NA
+
+preprocessed_data$DEMO_Age_c <- preprocessed_data$DEMO_Age-38 #using U.S. median age
+
+preprocessed_data$RaceCategorical<-factor(preprocessed_data$RaceCategorical,levels=unique(preprocessed_data$RaceCategorical))
+
+preprocessed_data$RuralZIP_i <- as.numeric(preprocessed_data$RuralZIP)
+preprocessed_data$RaceCategorical2 <- as.character(preprocessed_data$RaceCategorical)
+preprocessed_data$RaceCategorical2[preprocessed_data$RaceCategorical2=="RaceNotReported"] <- "OtherRaceRaceNotReported"
+preprocessed_data$RaceCategorical2[preprocessed_data$RaceCategorical2=="OtherRace"] <- "OtherRaceRaceNotReported"
+preprocessed_data$RaceCategorical2 <-factor(preprocessed_data$RaceCategorical2,levels=names(sort(table(preprocessed_data$RaceCategorical2),decreasing=TRUE)))
+```
+```{r}
+zscore <- function(x){
+  return((x-mean(x,na.rm=TRUE))/sd(x,na.rm=TRUE))
+}
+
+preprocessed_data$FFQ_fruits_ln_z <- as.numeric(preprocessed_data$FFQ_fruits) %>% log %>% zscore
+preprocessed_data$FFQ_vegetables_ln_z <- as.numeric(preprocessed_data$FFQ_vegetables) %>% log %>% zscore
+preprocessed_data$FFQ_fruit_vegetables_z <- (as.numeric(preprocessed_data$FFQ_fruits) + as.numeric(preprocessed_data$FFQ_vegetables)) %>% log %>% zscore
+```
+
+
+```{r}
+
+
+#11 is doctoral degree; 12+ are "other" and "decline to answer"
+preprocessed_data$DEMO_4[preprocessed_data$DEMO_4>11]<-NA
+
+preprocessed_data$Education_Categorical <- preprocessed_data$DEMO_4
+preprocessed_data$Education_Categorical <- preprocessed_data$DEMO_4
+preprocessed_data$Education_Categorical[preprocessed_data$DEMO_4<3] <- 3 #very few under three so we'll move them up
+#very few over 9, so we move them down
+preprocessed_data$Education_Categorical[preprocessed_data$DEMO_4>9] <- 9
+#now add descriptors
+preprocessed_data$Education_Categorical<-factor(
+  preprocessed_data$Education_Categorical,
+  levels=3:9,
+  labels=c("No high school diploma",
+           "High school diploma/GED",
+           "Some college credit, no degree",
+           "Trade, technical, or vocational training",
+           "Associate's degree",
+           "Bachelor's degree",
+           "Master's, Professional, or doctoral degree")
+)
+
+table(preprocessed_data$Education_Categorical)
+```
+
+
+```{r}
+#sanity check
+preprocessed_data %>% group_by(Gender3C) %>% summarize(mean_height_m = mean(HEIGHT_m,na.rm=TRUE))
+```
+
+
+
+# Establishing the baseline difference in women and men
+
+## Women
+
+With a few basic demographic variables included only, there is a difference between rural and urban women:
+
+```{r}
+print(summary(lm(BMI~RuralZIP+DEMO_Age_c+RaceCategorical,preprocessed_data %>% filter(Gender3C=="Female"))))
+```
+
+## Men
+
+The same set of explanatory variables reveals a much stronger difference in rural and urban men:
+
+
+```{r}
+print(summary(lm(BMI~RuralZIP+DEMO_Age_c+RaceCategorical,preprocessed_data %>% filter(Gender3C=="Male"))))
+```
+
+# Further examining demographic factors
+
+We can further examine demographic factors by adding a non-linear age term.
+```{r}
+preprocessed_data %>% group_by(Gender3C,RuralZIP) %>% summarize(total_count=n())
+```
+
+
+```{r}
+print(summary(lm(BMI~RuralZIP+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,preprocessed_data %>% filter(Gender3C=="Female"))))
+print(summary(lm(BMI~RuralZIP+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,preprocessed_data %>% filter(Gender3C=="Male"))))
+```
+The age term alone does not substantially add further explanatory power for men, but it does for women:
+
+```{r}
+anova(      lm(BMI~RuralZIP+DEMO_Age_c+RaceCategorical,preprocessed_data %>% filter(Gender3C=="Female")),
+            lm(BMI~RuralZIP+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,preprocessed_data %>% filter(Gender3C=="Female"))
+      )
+```
+
+
+On the contrary, there's a question whether there's a difference in rurality for women once you take age into account.
+
+```{r}
+anova_data <-preprocessed_data %>% filter(Gender3C=="Female" & !is.na(RuralZIP))
+anova(      lm(BMI~DEMO_Age+I(DEMO_Age_c^2)+RaceCategorical,anova_data),
+            lm(BMI~RuralZIP+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,anova_data)
+      )
+```
+
+Using anova, the model adding rural ZIP is marginally more significant; I certainly wouldn't rule out its extra predictive power on this basis, but it seems weak.
+
+
+
+
+Age is complicated. Perhaps we need to just treat it categorically. Another option is to try a predictive approach: use a regression tree to predict BMI using Age, Race,
+and RuralZIP, and see if RuralZIP adds anything.
+
+```{r}
+ggplot(preprocessed_data %>% filter(Gender3C %in% c("Male","Female")),aes(x = interaction(RuralZIP,Gender3C),y=BMI))+geom_boxplot()+geom_jitter()
+```
+
+No real evidence that there are different ages between the groups.
+
+
+```{r}
+print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,preprocessed_data %>% filter(Gender3C %in% c("Female", "Male")))))
+print(summary(lm(BMI~RuralZIP*Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,preprocessed_data %>% filter(Gender3C %in% c("Female", "Male")))))
+```
+
+
+
+## Regression tree
+
+I could try a categorical approach but I'd rather not, because that's inferior to a regression tree approach.
+
+Could try: https://uc-r.github.io/regression_trees
+
+But first check the crosstab:
+```{r}
+table(preprocessed_data$Gender3C,preprocessed_data$RuralZIP)
+```
+
+While we have enough data to do a full CART, we don't have enough data to do one for each of Female and Male AND validate the models.
+
+Furthermore, for rural men we don't even have enough data for a categorical approach, and an Age^2 is suspect. Therefore the best we can say is that we haven't checked for age as a confounder for men adequately, but it does show up for women while not in men and that's meaningful.
+
+But what we do want to do is to really try whether we can explain away the urban-rural disparity within women by controlling for age and race.
+
+We can see age is strongly significant. We have enough women to try. But how would we do this? We probably repeat the CART, each time with Age, but one time without rurality and one time with it, and measure the difference in modeling power (a) using ANOVA and (b) using cross-validation; perhaps a parametric t-test stat on cross-validation.
+
+```{r}
+preprocessed_data %>% filter(Gender3C %in% c("Male","Female")) %>% group_by(Gender3C,RuralZIP) %>% summarize(BMI_mean=mean(BMI,na.rm=TRUE))
+```
+
+
+```{r}
+ggplot(preprocessed_data %>% filter(Gender3C %in% c("Male","Female")),aes(x=RuralZIP,y=BMI) )+geom_boxplot()+geom_jitter(alpha=0.2)+facet_wrap(~Gender3C)
+```
+
+
+### First pass.
+
+
+```{r}
+data_to_ml_classify <- preprocessed_data %>% filter(Gender3C=="Female" & !is.na(DEMO_Age) & !is.na(BMI) & !is.na(RuralZIP)) #women only for this analysis
+```
+
+
+```{r}
+#install.packages("rsample")
+library(rsample)     # data splitting 
+library(dplyr)       # data wrangling
+library(rpart)       # performing regression trees
+library(rpart.plot)  # plotting regression trees
+library(ipred)       # bagging
+library(caret)       # bagging
+
+```
+
+```{r}
+data_to_ml_classify$stratification <-interaction(data_to_ml_classify$RuralZIP,data_to_ml_classify$Gender3C)
+set.seed(590536)
+subj_data_split <- initial_split(data_to_ml_classify,strata = stratification,prop = (nrow(data_to_ml_classify)-199)/nrow(data_to_ml_classify))
+subj_data_train <- training(subj_data_split)
+subj_data_test <- testing(subj_data_split)
+```
+
+```{r eval=FALSE, include=FALSE}
+m1 <- rpart(
+  formula = BMI~DEMO_Age+RuralZIP+RaceCategorical,
+  data    = subj_data_train,
+  method  = "anova"
+  )
+```
+
+```{r eval=FALSE, include=FALSE}
+rpart.plot(m1)
+```
+
+```{r eval=FALSE, include=FALSE}
+plotcp(m1)
+```
+
+This shows adding addiitonal values doesn't really help much! We could actually just use one split, age<23 or not.
+
+
+
+
+```{r eval=FALSE, include=FALSE}
+m1_more_leaves <- rpart(
+    formula = BMI~DEMO_Age+RuralZIP+RaceCategorical,
+  data    = subj_data_train,
+    method  = "anova", 
+    control = list(cp = 0, xval = 10)
+)
+
+plotcp(m1_more_leaves)
+```
+We should do hyperparameter training so that each model can perform optimally...
+
+```{r eval=FALSE}
+hyper_grid <- expand.grid(
+  minsplit = seq(10, 20, 1),
+  maxdepth = seq(5, 15, 1)
+)
+
+m1_hyper_tuning <- list()
+
+for (i in 1:nrow(hyper_grid)) {
+  
+  # get minsplit, maxdepth values at row i
+  minsplit <- hyper_grid$minsplit[i]
+  maxdepth <- hyper_grid$maxdepth[i]
+
+  # train a model and store in the list
+  m1_hyper_tuning[[i]] <- rpart(
+    formula = BMI~DEMO_Age+RuralZIP+RaceCategorical,
+    data    = subj_data_train,
+    method  = "anova",
+    control = list(minsplit = minsplit, maxdepth = maxdepth)
+    )
+}
+
+```
+
+
+```{r eval=FALSE}
+# function to get optimal cp
+get_cp <- function(x) {
+  min    <- which.min(x$cptable[, "xerror"])
+  cp <- x$cptable[min, "CP"] 
+}
+
+# function to get minimum error
+get_min_error <- function(x) {
+  min    <- which.min(x$cptable[, "xerror"])
+  xerror <- x$cptable[min, "xerror"] 
+}
+
+hyper_results <- hyper_grid %>%
+  mutate(
+    cp    = purrr::map_dbl(m1_hyper_tuning, get_cp),
+    error = purrr::map_dbl(m1_hyper_tuning, get_min_error)
+    )
+
+```
+
+
+
+```{r eval=FALSE}
+hist(hyper_results$error)
+```
+
+
+
+
+```{r eval=FALSE}
+ hyper_results %>% arrange(error) %>% top_n(-10,wt=error)
+```
+
+Let's pick the strictest of the values that are under 1.00 across the two. This is minsplit=20, maxdepth=6
+
+Now to do bagging....
+
+```{r eval=FALSE}
+set.seed(584376)
+
+# train bagged model
+bagged_m1 <- bagging(
+  formula = BMI~DEMO_Age+RuralZIP+RaceCategorical,
+  data    = subj_data_train,
+  coob    = TRUE
+)
+
+```
+
+```{r eval=FALSE}
+# assess 10-50 bagged trees
+ntree <- 10:100
+
+# create empty vector to store OOB RMSE values
+rmse <- vector(mode = "numeric", length = length(ntree))
+
+for (i in seq_along(ntree)) {
+  # reproducibility
+  set.seed(123)
+  
+  # perform bagged model
+  model <- bagging(
+  formula = BMI~DEMO_Age+RuralZIP+RaceCategorical,
+  data    = subj_data_train,
+  coob    = TRUE,
+  nbagg   = ntree[i]
+)
+  # get OOB error
+  rmse[i] <- model$err
+}
+
+plot(ntree, rmse, type = 'l', lwd = 2)
+abline(v = 25, col = "red", lty = "dashed")
+```
+
+Think the wide variance after 40 can be taken as not particularly important, suggesting that after 40 trees we can stop. But let's try the same process with caret.
+
+
+```{r eval=FALSE}
+# Specify 10-fold cross validation
+ctrl <- trainControl(method = "cv",  number = 10) 
+
+# CV bagged model
+bagged_cv <- caret::train(
+  form = BMI~DEMO_Age+RuralZIP+RaceCategorical,
+  data    = subj_data_train %>% select(BMI,DEMO_Age,RuralZIP,RaceCategorical),
+  method = "treebag",
+  trControl = ctrl,
+  importance = TRUE
+  )
+
+# assess results
+bagged_cv
+
+```
+
+
+
+```{r eval=FALSE}
+
+
+# plot most important variables
+plot(varImp(bagged_cv), 5)  
+```
+
+OK, so rural ZIP seems relatively important. But how important is it? Let's repeat 423 times, each time with a different train/test split, and get the RMSE each time.
+
+```{r eval=FALSE}
+RMSE(predict(bagged_cv,subj_data_test),subj_data_test$BMI)
+```
+### Comparative cross-validation
+
+
+```{r}
+set.seed(147074)
+data_to_ml_classify$stratification <-interaction(data_to_ml_classify$RuralZIP,data_to_ml_classify$Gender3C)
+
+# #loocv
+# ctrl <- trainControl(method = "cv",  number = 10) 
+# 
+# subj_data_split <- initial_split(data_to_ml_classify,strata = stratification,prop = (nrow(data_to_ml_classify)-199)/nrow(data_to_ml_classify))
+# subj_data_train <- training(subj_data_split)
+# subj_data_test <- testing(subj_data_split)
+```
+
+```{r}
+# Specify 10-fold cross validation
+ctrl <- trainControl(method = "loocv") 
+
+bagged_cv_m0 <- caret::train(
+  form = BMI~DEMO_Age+RuralZIP+RaceCategorical,
+  data    = data_to_ml_classify %>% select(BMI,DEMO_Age,RuralZIP,RaceCategorical),
+  method = "treebag",
+  trControl = ctrl,
+  importance = TRUE
+  )
+
+bagged_cv_m1 <- caret::train(
+  form = BMI~DEMO_Age+RaceCategorical,
+  data    = data_to_ml_classify %>% select(BMI,DEMO_Age,RuralZIP,RaceCategorical),
+  method = "treebag",
+  trControl = ctrl,
+  importance = TRUE
+  )
+```
+
+Because were're using LOOCV, the RMSE and MAE are not working properly for each fold. So long as it's doing proper bagging within each fold, we can probably apply RMSE across the whole set manually for each model.
+
+```{r}
+model_0_mae <- mean(bagged_cv_m0$resample$MAE)
+model_1_mae <- mean(bagged_cv_m1$resample$MAE)
+```
+
+Because were're using LOOCV, the RMSE and MAE are not working properly for each fold. So long as it's doing proper bagging within each fold, we can probably apply RMSE across the whole set manually for each model.
+```{r}
+t.test(bagged_cv_m0$resample$MAE,bagged_cv_m1$resample$MAE)
+```
+
+Our finding is no significant predictive value for Rurality once age is taken into account.
+
+Past research has not adequately broken down data by gender and finds disparities, blaming them on behavior (https://www.rrh.org.au/journal/article/3267) but we found that at least among women, race and age are adequate for explaining BMI. Rural ZIP code adds nothing more. 
+
+One could ask whether rural ZIP adds explanatory power if we ignore race; it isn't clear that race should be used to "explain away" disparities.
+
+
+```{r eval=FALSE, include=FALSE}
+# Specify 10-fold cross validation
+ctrl <- trainControl(method = "loocv") 
+
+bagged_cv_m0 <- caret::train(
+  form = BMI~DEMO_Age+RuralZIP,
+  data    = data_to_ml_classify %>% select(BMI,DEMO_Age,RuralZIP,RaceCategorical),
+  method = "treebag",
+  trControl = ctrl,
+  importance = TRUE
+  )
+
+bagged_cv_m1 <- caret::train(
+  form = BMI~DEMO_Age,
+  data    = data_to_ml_classify %>% select(BMI,DEMO_Age,RuralZIP,RaceCategorical),
+  method = "treebag",
+  trControl = ctrl,
+  importance = TRUE
+  )
+```
+
+Even when ignoring race, adding Rural ZIP doesn't help us to understand BMI better than age alone among Oregon women.
+
+```{r eval=FALSE, include=FALSE}
+model_0_mae <- mean(bagged_cv_m0$resample$MAE)
+model_1_mae <- mean(bagged_cv_m1$resample$MAE)
+t.test(bagged_cv_m0$resample$MAE,bagged_cv_m1$resample$MAE)
+```
+
+```{r eval=FALSE, include=FALSE}
+t.test(bagged_cv_m0$resample$MAE,bagged_cv_m1$resample$MAE)
+```
+
+### corroborating this finding
+
+https://www.sciencedirect.com/science/article/pii/S0091743519302889
+
+
+Possible datasets 
+Examining the BRFSS dataset...
+
+https://nccd.cdc.gov/weat/#/crossTabulation/viewReport
+
+We need to :
+ - filter by Gender==Female
+ - Cross-tab BMI, Age, and rural status
+ 
+ The cross-tabulation report on the website doesn't appear to have urbal-urban classification.
+
+Zahnd et al. (https://www.sciencedirect.com/science/article/pii/S0091743519302889) seems to confirm the data isn't publicly available in BRFSS.
+
+The NHIS data might include relevant data, but generally is not available publicly except onsight at Research Data Centers.
+
+MEPS data is likewise not freely available.
+
+HINTS data inclues Rural Urban Commuter Codes for participants' county of residence. It generally includes BMI.
+
+Does it also include Gender and Age? Must do. So let's try this dataset.
+
+Might be some other data available if I sign a data use agreement; see https://www.sciencedirect.com/science/article/pii/S0091743519302889#t0010
+
+#### What are the implications?
+
+Does it matter if age can "explain away" the BMI difference between rural and urban ZIP codes? Yes: in older adults, BMI is less of a risk factor. There are likely issues with rural health, but there is not a national trend of high BMI among rural women. The disparity can be explained by younger women migrating to cities.
+
+## additional factors
+
+
+
+```{r}
+print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,preprocessed_data)))
+```
+
+So--those are the demographic factors we've identified so far. Howe can we try to explain that fairly considerable rural-urban gap using the variables at our disposal?
+
+First might be eating and exercising--let's check:
+
+```{r}
+
+print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+FFQ_cancer_preventing+FFQ_cancer_promoting,preprocessed_data)))
+```
+
+FFQ is important, but it doesn't seem to change the ruralZIP estimate. 
+
+What about exercise?
+
+
+
+```{r}
+
+
+print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+IPAQ_total_METminutes,preprocessed_data)))
+```
+Nope, not at all!
+
+We have some environmental measures I think worked before. Do they still work?
+```{r}
+
+print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+MESA_healthyfoodavailability,preprocessed_data )))
+```
+
+
+So that seems to somewhat reduce RuralZIP. Not by much but something. What about the other key MESA measures?
+
+```{r}
+
+print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+MESA_neighborhoodconnectedness,preprocessed_data )))
+
+print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+MESA_safetyfromcrime,preprocessed_data)))
+
+```
+No; including those in the model actualy strengthen the rural association suggesting there are protective factors related to rural communities. Okay, let's try the mediation model on that MESA that appeared to work, strictly as registered:
+
+
+
+```{r}
+library(mediation)
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(BMI))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(MESA_healthyfoodavailability~RuralZIP+Gender3C+DEMO_Age_c+RaceCategorical2+PSS_sum,data_to_measure)
+mc <- lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+RaceCategorical2+MESA_healthyfoodavailability+PSS_sum,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=100,treat="RuralZIP",mediator="MESA_healthyfoodavailability")
+summary(mediate_result)
+summary(mc)
+
+
+```
+
+
+```{r}
+library(mediation)
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(BMI))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(MESA_healthyfoodavailability~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2+PSS_sum,data_to_measure)
+mc <- lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2+MESA_healthyfoodavailability+PSS_sum,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=100,treat="RuralZIP",mediator="MESA_healthyfoodavailability")
+summary(mediate_result)
+summary(mc)
+
+
+```
+
+Try it again with the most literal interpretation of the prediction--we're only controlling for perceived stress.
+
+
+```{r}
+library(mediation)
+
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(cancer_promoting_minus_preventing_FFQ))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(MESA_healthyfoodavailability~RuralZIP_i+PSS_sum,data_to_measure)
+mc <- lm(cancer_promoting_minus_preventing_FFQ~RuralZIP_i+PSS_sum+MESA_healthyfoodavailability,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=100,treat="RuralZIP_i",mediator="MESA_healthyfoodavailability")
+summary(mediate_result)
+summary(mc)
+
+
+```
+
+
+```{r}
+mc <- lm(BMI~PSS_sum+MESA_healthyfoodavailability,data_to_measure)
+summary(mc)
+```
+
+```{r}
+library(mediation)
+
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(BMI))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(MESA_healthyfoodavailability~RuralZIP_i+PSS_sum,data_to_measure)
+mc <- lm(BMI~RuralZIP_i+PSS_sum+MESA_healthyfoodavailability,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=10000,treat="RuralZIP_i",mediator="MESA_healthyfoodavailability")
+summary(mediate_result)
+summary(mc)
+
+
+```
+
+
+Healthy food availability DOES appear to mediate that relationship; a modest result, estimating 15%, but it's significant. 
+
+
+What about the other protective factors?
+
+
+```{r}
+library(mediation)
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(BMI))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(MESA_neighborhoodconnectedness~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,data_to_measure)
+mc <- lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+MESA_neighborhoodconnectedness,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=100,treat="RuralZIP",mediator="MESA_neighborhoodconnectedness")
+summary(mediate_result)
+summary(mc)
+
+```
+
+
+
+
+```{r}
+library(mediation)
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(BMI))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(MESA_safetyfromcrime~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,data_to_measure)
+mc <- lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+MESA_safetyfromcrime ,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=100,treat="RuralZIP",mediator="MESA_safetyfromcrime")
+summary(mediate_result)
+summary(mc)
+
+```
+
+Almosts suggests a protective factor! but not quite significant.
+
+
+
+What about our psychological measures?
+
+```{r}
+print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,preprocessed_data)))
+print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+EDM_mean,preprocessed_data)))
+print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+cancer_promoting_minus_preventing_liked_FCI,preprocessed_data)))
+print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+cancer_promoting_minus_preventing_craved_FCI,preprocessed_data)))
+  #not quite
+
+
+```
+
+
+OK, maybe something there for FCI....
+
+
+
+```{r}
+library(mediation)
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(BMI))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(cancer_promoting_minus_preventing_liked_FCI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,data_to_measure)
+mc <- lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+cancer_promoting_minus_preventing_liked_FCI ,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=100,treat="RuralZIP",mediator="cancer_promoting_minus_preventing_liked_FCI")
+summary(mediate_result)
+summary(mc)
+
+```
+
+No, doesn't seem to show a proportion mediated...
+
+```{r}
+print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,preprocessed_data)))
+print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+PSS_sum,preprocessed_data)))
+print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+SRHI_sum,preprocessed_data)))
+print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+AFSM,preprocessed_data)))
+
+```
+
+Perhaps height?
+
+
+
+```{r}
+
+
+print(summary(lm(BMI~RuralZIP*HEIGHT_m+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,preprocessed_data %>% filter(Gender3C %in% c("Female", "Male")))))
+```
+
+
+## Follow-up on healthy food availability
+
+OK, so I think we have found a result. Healthy Food Availability is a mediator. The effect is quite robust. 
+
+Wonder how it would look _within_ rural and urban areas?
+
+
+```{r}
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(BMI) & RuralZIP==TRUE)
+
+summary(lm(BMI~Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+MESA_healthyfoodavailability,data_to_measure))
+```
+
+Don't quite ind an effect specifically within rural areas.
+
+
+
+```{r}
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(BMI) & RuralZIP==FALSE)
+
+summary(lm(BMI~Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+MESA_healthyfoodavailability,data_to_measure))
+```
+
+...or within urban ones
+
+
+Let's do more simulations so we get a more accurate estimate
+
+```{r}
+library(mediation)
+
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(BMI) & Gender3C %in% c("Male","Female"))
+
+#we need this to work with the bootstrap mediator.
+#Rurality -> Income -> BMI
+
+
+mb <- lm(MESA_healthyfoodavailability~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2,data_to_measure)
+mc <- lm(BMI~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2+MESA_healthyfoodavailability,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=10000,boot=TRUE,treat="RuralZIP_i",mediator="MESA_healthyfoodavailability")
+summary(mediate_result)
+summary(mc)
+
+```
+
+
+Then add every variable above that seemed predictive and confirm that the mediation effect still holds. Those are:
+
+ - FFQ_cancer_preventing+FFQ_cancer_promoting
+ - IPAQ_total_METminutes
+ - MESA_neighborhoodconnectedness
+ - MESA_safetyfromcrime
+ - EDM_mean
+ - cancer_promoting_minus_preventing_liked_FCI
+ - cancer_promoting_minus_preventing_craved_FCI
+
+
+
+```{r}
+library(mediation)
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(BMI)) %>% filter(!is.na(BMI) & Gender3C %in% c("Male","Female"))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(MESA_healthyfoodavailability~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2+
+           FFQ_cancer_preventing+FFQ_cancer_promoting+
+           IPAQ_total_METminutes+
+           MESA_neighborhoodconnectedness+
+           MESA_safetyfromcrime+
+           EDM_mean+
+            cancer_promoting_minus_preventing_liked_FCI+
+            cancer_promoting_minus_preventing_craved_FCI
+         ,data_to_measure)
+mc <- lm(BMI~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2+MESA_healthyfoodavailability+
+           FFQ_cancer_preventing+FFQ_cancer_promoting+
+           IPAQ_total_METminutes+
+           MESA_neighborhoodconnectedness+
+           MESA_safetyfromcrime+
+           EDM_mean+
+            cancer_promoting_minus_preventing_liked_FCI+
+            cancer_promoting_minus_preventing_craved_FCI,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=1000,boot=TRUE,treat="RuralZIP_i",mediator="MESA_healthyfoodavailability")
+summary(mediate_result)
+summary(mc)
+
+```
+effect isn't quite robust enough to throwing in all these extra variables.
+
+If we take out only the ones that are significant, one at a time, until only significant covariates are included...
+
+```{r}
+summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+MESA_healthyfoodavailability+
+           FFQ_cancer_preventing+FFQ_cancer_promoting+
+           IPAQ_total_METminutes+
+           MESA_neighborhoodconnectedness+
+           MESA_safetyfromcrime+
+           EDM_mean+
+            cancer_promoting_minus_preventing_craved_FCI,data_to_measure))
+summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+MESA_healthyfoodavailability+
+           FFQ_cancer_preventing+FFQ_cancer_promoting+
+           IPAQ_total_METminutes+
+           MESA_neighborhoodconnectedness+
+           MESA_safetyfromcrime+
+           EDM_mean+
+            cancer_promoting_minus_preventing_craved_FCI,data_to_measure))
+
+summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+MESA_healthyfoodavailability+
+           FFQ_cancer_preventing+FFQ_cancer_promoting+
+           IPAQ_total_METminutes+
+           MESA_safetyfromcrime+
+           EDM_mean+
+            cancer_promoting_minus_preventing_craved_FCI,data_to_measure))
+
+summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+MESA_healthyfoodavailability+
+           FFQ_cancer_preventing+
+           IPAQ_total_METminutes+
+           MESA_safetyfromcrime+
+           EDM_mean+
+            cancer_promoting_minus_preventing_craved_FCI,data_to_measure))
+
+summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+MESA_healthyfoodavailability+
+           FFQ_cancer_preventing+
+           IPAQ_total_METminutes+
+           EDM_mean+
+            cancer_promoting_minus_preventing_craved_FCI,data_to_measure))
+
+```
+
+This is the "maximal" model but with all non-significant variables removed until we have only demographic variables as well as those that remain significant.
+
+```{r}
+
+summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+MESA_healthyfoodavailability+
+           IPAQ_total_METminutes+
+           EDM_mean+
+            cancer_promoting_minus_preventing_craved_FCI,data_to_measure))
+
+```
+
+```{r}
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(BMI)) %>% filter(!is.na(BMI) & Gender3C %in% c("Male","Female"))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(MESA_healthyfoodavailability~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2+
+           IPAQ_total_METminutes+
+           EDM_mean+
+            cancer_promoting_minus_preventing_craved_FCI,data_to_measure)
+mc <- lm(BMI~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2+MESA_healthyfoodavailability+
+           IPAQ_total_METminutes+
+           EDM_mean+
+            cancer_promoting_minus_preventing_craved_FCI,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=1000,treat="RuralZIP_i",boot=TRUE,mediator="MESA_healthyfoodavailability")
+summary(mediate_result)
+summary(mc)
+
+```
+
+And how about stripped back to *only* the key variables in the mediation?
+
+
+```{r}
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(BMI)) %>% filter(!is.na(BMI) & Gender3C %in% c("Male","Female"))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(MESA_healthyfoodavailability~RuralZIP_i,data_to_measure)
+mc <- lm(BMI~RuralZIP_i+MESA_healthyfoodavailability,data_to_measure)
+
+summary(mc)
+
+mediate_result <- mediate(mb,mc,sims=1000,treat="RuralZIP_i",boot=TRUE,mediator="MESA_healthyfoodavailability")
+summary(mediate_result)
+
+```
+
+## Rural-urban food consumed
+
+So we had a previous result mediating rural-urban bmi differnces:
+```{r}
+
+library(mediation)
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(BMI))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(MESA_healthyfoodavailability~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,data_to_measure)
+mc <- lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+MESA_healthyfoodavailability,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=100,treat="RuralZIP",mediator="MESA_healthyfoodavailability")
+summary(mediate_result)
+summary(mb)
+summary(mc)
+
+```
+
+
+
+So if healthy food availability is important, we should be able to see rural-urban differences in food consumption. Let's focus on healthy food. First
+
+```{r}
+ma <- lm(cancer_preventing_FFQ~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,preprocessed_data)
+summary(ma)
+
+ma1 <- lm(FFQ_vegetables~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,preprocessed_data)
+summary(ma1)
+
+ma1a <- lm(FFQ_vegetables_ln_z~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,preprocessed_data)
+summary(ma1a)
+
+
+
+ma2 <- lm(FFQ_fruits ~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,preprocessed_data)
+summary(ma2)
+
+ma2a <- lm(FFQ_fruits_ln_z ~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,preprocessed_data)
+summary(ma2a)
+
+ma3 <- lm(cancer_promoting_FFQ ~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,preprocessed_data)
+summary(ma3)
+
+```
+
+```{r}
+
+```
+
+
+```{r}
+ggplot(data_to_measure %>% filter(!is.na(RuralZIP)),aes(x=RuralZIP,y=MESA_healthyfoodavailability))+geom_boxplot()+geom_jitter()
+```
+### Try replicating from HINTS
+
+First: fruit and veggies as a predictor of BMI
+
+
+```{r}
+
+# mb <- lm(mediator~treat+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,data_to_measure)
+# mc <- lm(predicted~treat+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+mediator,data_to_measure)
+# 
+# mediate_result <- mediate(mb,mc,sims=100,treat="RuralZIP",mediator="MESA_healthyfoodavailability")
+# summary(mediate_result)
+# mb <- lm(Fruit_z~Age_c+I(Age_c^2)+Gender3C+HINESIsRural+RacePreprocessed+filename+HHInc_r,data_to_measure)
+# mc <- lm(BMI~Age_c+I(Age_c^2)+Gender3C+HINESIsRural+RacePreprocessed+filename+HHInc_r+Fruit_z,data_to_measure)
+# 
+# fruit_mediation <- mediate(mb,mc,sims=100,treat="HINESIsRural",mediator="Fruit_z")
+library(mediation)
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(BMI) & !is.na(MESA_healthyfoodavailability) & !is.na(FFQ_vegetables_ln_z) & !is.na(RuralZIP))
+
+
+mb <- lm(FFQ_vegetables_ln_z~RuralZIP+MESA_healthyfoodavailability+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+aSES_02,data_to_measure)
+mc <- lm(BMI~            RuralZIP+MESA_healthyfoodavailability+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+aSES_02+FFQ_vegetables_ln_z,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=100,treat="RuralZIP",mediator="FFQ_vegetables_ln_z")
+summary(mediate_result)
+summary(mb)
+summary(mc)
+
+```
+
+
+```{r}
+
+
+library(mediation)
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(BMI) & !is.na(MESA_healthyfoodavailability) & !is.na(FFQ_fruits_ln_z) & !is.na(RuralZIP))
+
+
+
+mb <- lm(FFQ_fruits_ln_z~RuralZIP+MESA_healthyfoodavailability+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+aSES_02,data_to_measure)
+mc <- lm(BMI~            RuralZIP+MESA_healthyfoodavailability+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+aSES_02+FFQ_fruits_ln_z,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=100,treat="RuralZIP",mediator="FFQ_fruits_ln_z")
+summary(mediate_result)
+summary(mb)
+summary(mc)
+
+```
+
+
+```{r}
+
+
+library(mediation)
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(BMI) & !is.na(MESA_healthyfoodavailability) & !is.na(FFQ_fruits_ln_z) & !is.na(RuralZIP))
+
+
+
+mb <- lm(FFQ_fruits_ln_z~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,data_to_measure)
+mc <- lm(BMI~            RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+FFQ_fruits_ln_z,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=100,treat="RuralZIP",mediator="FFQ_fruits_ln_z")
+summary(mediate_result)
+summary(mb)
+summary(mc)
+
+```
+
+OK, but doesfruit consumption mediate the relationship between healthy food availability and BMI?
+
+
+```{r}
+
+library(mediation)
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(BMI) & !is.na(MESA_healthyfoodavailability) & !is.na(FFQ_fruits_ln_z) & !is.na(RuralZIP) &Gender3C %in% c("Female", "Male"))
+
+# treatment MESA_healthyfoodavailability
+# mediator FFQ_fruits_ln_z
+
+mb <- lm(FFQ_fruits_ln_z~RuralZIP+MESA_healthyfoodavailability+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,data_to_measure)
+mc <- lm(BMI~            RuralZIP+MESA_healthyfoodavailability+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+FFQ_fruits_ln_z,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=10000,treat="MESA_healthyfoodavailability",mediator="FFQ_fruits_ln_z")
+summary(mediate_result)
+summary(mb)
+summary(mc)
+
+```
+
+
+## SES
+
+```{r}
+#SES_01
+#What was your individual income, earned and unearned, before taxes during the past 12 months?
+
+#SES_02
+#What was your total household income, earned and unearned, before taxes during the past 12 months?
+
+#SES_03
+#Indicate the total number of people in your household who are supported on this household income, including children, adults who earn, and adults who do not earn:
+#SES_04
+
+#preprocessed_data$SES_03_Balanced <- preprocessed_data$aSES_02/as.integer(preprocessed_data$aSES_03)
+
+#DEMO_8
+#Cantril ladder
+
+#print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+MESA_healthyfoodavailability,preprocessed_data )))
+
+print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2
+                 ,preprocessed_data
+                 )))
+
+print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2+MESA_healthyfoodavailability
+                 ,preprocessed_data
+                 )))
+
+print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2+aSES_01+aSES_02+DEMO_8
+                 ,preprocessed_data
+                 )))
+
+```
+
+
+```{r}
+preprocessed_data$SES_combined<-rowMeans(preprocessed_data %>% select(aSES_01,aSES_02),na.rm=TRUE)
+print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2+aSES_01+aSES_02
+                 ,preprocessed_data
+                 )))
+print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2+aSES_02
+                 ,preprocessed_data
+                 )))
+
+print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2+SES_combined
+                 ,preprocessed_data
+                 )))
+```
+
+So...SES seems important for bmi, but it's also the case that RuralZIP is still a significant predictor even controlling for income
+
+Individual income doesn't seem to help explain anything over and above household income, so we'll just use household income.
+
+Does it mediate?
+
+
+
+```{r}
+library(mediation)
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(BMI)) %>% filter(!is.na(BMI) & Gender3C %in% c("Male","Female"))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(aSES_02~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2#+
+           #FFQ_cancer_preventing+FFQ_cancer_promoting+
+           # IPAQ_total_METminutes+
+           # MESA_neighborhoodconnectedness+
+           # MESA_safetyfromcrime+
+           # EDM_mean+
+            # cancer_promoting_minus_preventing_liked_FCI+
+            # cancer_promoting_minus_preventing_craved_FCI
+         ,data_to_measure)
+mc <- lm(BMI~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2+aSES_02#+
+           #FFQ_cancer_preventing+FFQ_cancer_promoting+
+           # IPAQ_total_METminutes+
+           # MESA_neighborhoodconnectedness+
+           # MESA_safetyfromcrime+
+           # EDM_mean+
+            # cancer_promoting_minus_preventing_liked_FCI+
+            # cancer_promoting_minus_preventing_craved_FCI
+         ,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=100,boot=TRUE,treat="RuralZIP_i",mediator="aSES_02")
+summary(mediate_result)
+plot(mediate_result)
+
+summary(mc)
+
+```
+
+SES most definitely mediates this relationship between RuralZIP and BMI. 
+
+What about the relationship between RuralZIP and Food availability?
+
+
+
+```{r}
+library(mediation)
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(MESA_healthyfoodavailability)) %>% filter(!is.na(MESA_healthyfoodavailability) & Gender3C %in% c("Male","Female"))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(aSES_02~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2#+
+           #FFQ_cancer_preventing+FFQ_cancer_promoting+
+           # IPAQ_total_METminutes+
+           # MESA_neighborhoodconnectedness+
+           # MESA_safetyfromcrime+
+           # EDM_mean+
+            # cancer_promoting_minus_preventing_liked_FCI+
+            # cancer_promoting_minus_preventing_craved_FCI
+         ,data_to_measure)
+mc <- lm(MESA_healthyfoodavailability~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2+aSES_02#+
+           #FFQ_cancer_preventing+FFQ_cancer_promoting+
+           # IPAQ_total_METminutes+
+           # MESA_neighborhoodconnectedness+
+           # MESA_safetyfromcrime+
+           # EDM_mean+
+            # cancer_promoting_minus_preventing_liked_FCI+
+            # cancer_promoting_minus_preventing_craved_FCI
+         ,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=100,boot=TRUE,treat="RuralZIP_i",mediator="aSES_02")
+summary(mediate_result)
+summary(mc)
+
+```
+
+Yep, SES mediates that effect.
+
+
+```{r}
+print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2+MESA_healthyfoodavailability
+                 ,preprocessed_data
+                 )))
+print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2+aSES_02+MESA_healthyfoodavailability
+                 ,preprocessed_data
+                 )))
+```
+
+In fact, the effect of MESA healthy food availability on BMI is not longer significant if we add SES into the model...
+
+```{r}
+library(mediation)
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(BMI)) %>% filter(!is.na(BMI) & Gender3C %in% c("Male","Female"))
+
+#Rurality -> Income -> BMI
+#
+
+mb <- lm(MESA_healthyfoodavailability~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2+
+           aSES_02
+           #FFQ_cancer_preventing+FFQ_cancer_promoting+
+           # IPAQ_total_METminutes+
+           # MESA_neighborhoodconnectedness+
+           # MESA_safetyfromcrime+
+           # EDM_mean+
+            # cancer_promoting_minus_preventing_liked_FCI+
+            # cancer_promoting_minus_preventing_craved_FCI
+         ,data_to_measure)
+mc <- lm(BMI~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2+MESA_healthyfoodavailability+
+           aSES_02
+           #FFQ_cancer_preventing+FFQ_cancer_promoting+
+           # IPAQ_total_METminutes+
+           # MESA_neighborhoodconnectedness+
+           # MESA_safetyfromcrime+
+           # EDM_mean+
+            # cancer_promoting_minus_preventing_liked_FCI+
+            # cancer_promoting_minus_preventing_craved_FCI
+         ,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=10000,boot=TRUE,treat="RuralZIP_i",mediator="MESA_healthyfoodavailability")
+summary(mediate_result)
+summary(mc)
+```
+
+
+And with SES in the model, MESA_healthyfoodavailability no longer appears to be a mediator. 
+
+
+```{r}
+print(cor.test(data_to_measure$aSES_02,data_to_measure$MESA_healthyfoodavailability))
+
+ggplot(data_to_measure %>% filter(!is.na(RuralZIP)),aes(aSES_02,MESA_healthyfoodavailability,color=RuralZIP))+geom_jitter(alpha=0.5)
+```
+
+Because yes--SES and healthy food availability are correlated.
+
+So have we explained away that rural relationship? We have MESA_healthyfoodavailability, SES, EDM...
+
+```{r}
+print(summary(lm(BMI~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2+
+           aSES_02+MESA_healthyfoodavailability,preprocessed_data)))
+
+
+print(summary(lm(BMI~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2+
+           aSES_02+MESA_healthyfoodavailability+EDM_mean,preprocessed_data)))
+
+```
+
+Not necessarily--rurality is still marginally significant even after accounting for all these variables. That's Ell's "cultural factors".
+
+```{r}
+
+print(summary(lm(BMI~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2+
+           aSES_02+MESA_healthyfoodavailability+EDM_mean+IPAQ_total_METminutes,preprocessed_data)))
+
+```
+
+
+```{r}
+
+print(summary(lm(BMI~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2+
+           aSES_02+MESA_healthyfoodavailability+EDM_mean+IPAQ_total_METminutes,preprocessed_data)))
+
+```
+
+
+
+```{r}
+
+print(summary(lm(BMI~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2+
+           aSES_02+MESA_healthyfoodavailability+EDM_mean+IPAQ_total_METminutes+
+             FFQ_cancer_preventing+FFQ_cancer_promoting,preprocessed_data)))
+
+```
+
+
+
+In summary, we can't fully explain higher rural BMIs even after accounting for all these external factors. Not only that, but we can't explain it with subject factors like diet, exercise, and social status.
+
+Remaining variables are:
+
+ - personality
+ - culture
+ 
+
+ 
+ 
+However, both healthy food availability and SES appear to partially mediate the relationship. Furthermore, they overlap, i.e., healthy food availability is related to SES, and after controlling for SES, healthy food availability is no longer relevant for explaining the rural-urban BMI difference.
+
+Considering that:
+ - it does NOT appear that food availability actually produces measurable differences in consumption behavior. 
+ - After controlling for SES, food availability is no longer relevant for mediating the relatoinship between BMI and RuralZIP
+ 
+It looks like we can fully explain the mediation of food availability in terms of SES.
+
+Are there any other mediating factors we could identify?
+
+Education (https://pubmed.ncbi.nlm.nih.gov/29214811/)
+
+```{r}
+table(preprocessed_data$Education_Categorical)
+```
+
+```{r}
+
+print(summary(lm(BMI~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2+
+           aSES_02+MESA_healthyfoodavailability+Education_Categorical,preprocessed_data)))
+
+#education as ranked
+print(summary(lm(BMI~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical2+
+           aSES_02+MESA_healthyfoodavailability+DEMO_4,preprocessed_data)))
+```
+
+Very interesting that it makes no difference in this sample.
+
+
+
+
+```{r}
+print(summary(lm(BMI~RuralZIP_i+Gender3C+RaceCategorical2
+                   #+DEMO_Age_c+I(DEMO_Age_c^2)
+           #aSES_02+MESA_healthyfoodavailability+EDM_mean+IPAQ_total_METminutes+
+            # FFQ_cancer_preventing+FFQ_cancer_promoting
+             ,preprocessed_data)))
+print(summary(lm(BMI~RuralZIP_i+Gender3C+RaceCategorical2+
+                   DEMO_Age_c+I(DEMO_Age_c^2)
+           #aSES_02+MESA_healthyfoodavailability+EDM_mean+IPAQ_total_METminutes+
+            # FFQ_cancer_preventing+FFQ_cancer_promoting
+             ,preprocessed_data)))
+
+```
+
+
+It's a bit difficult to test age (because we're relying on two variables, linear and quadratic) but it doesn't seem to be a mediator.
+
+EDM?
+
+```{r}
+
+library(mediation)
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(BMI))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(EDM_mean~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,data_to_measure)
+mc <- lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+EDM_mean,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=100,treat="RuralZIP",mediator="EDM_mean")
+summary(mediate_result)
+summary(mb)
+summary(mc)
+
+```
+
+Not at all. It's important, but not related to rurality.
+
+Exercise?
+
+
+
+```{r}
+
+library(mediation)
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(BMI))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(IPAQ_total_METminutes~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,data_to_measure)
+mc <- lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+IPAQ_total_METminutes,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=100,treat="RuralZIP",mediator="IPAQ_total_METminutes")
+summary(mediate_result)
+summary(mb)
+summary(mc)
+
+```
+Nope--not a mediator.
+
+Diet?
+
+
+
+```{r}
+
+library(mediation)
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(BMI))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(cancer_promoting_minus_preventing_FFQ~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,data_to_measure)
+mc <- lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+cancer_promoting_minus_preventing_FFQ,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=100,treat="RuralZIP",mediator="cancer_promoting_minus_preventing_FFQ")
+summary(mediate_result)
+summary(mb)
+summary(mc)
+
+```
+
+
+
+```{r}
+
+library(mediation)
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(BMI))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(cancer_promoting_FFQ~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,data_to_measure)
+mc <- lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+cancer_promoting_FFQ,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=100,treat="RuralZIP",mediator="cancer_promoting_FFQ")
+summary(mediate_result)
+summary(mb)
+summary(mc)
+
+```
+
+
+```{r}
+
+library(mediation)
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(BMI))
+
+#Rurality -> Income -> BMI
+
+
+
+
+mb <- lm(FFQ_fruits_ln_z~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+aSES_02,data_to_measure)
+mc <- lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+aSES_02+FFQ_fruits_ln_z,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=100,treat="RuralZIP",mediator="FFQ_fruits_ln_z")
+summary(mediate_result)
+summary(mb)
+summary(mc)
+
+```
+
+```{r}
+
+library(mediation)
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(BMI))
+
+#Rurality -> Income -> BMI
+
+
+
+
+mb <- lm(FFQ_vegetables_ln_z~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+aSES_02,data_to_measure)
+mc <- lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+aSES_02+FFQ_vegetables_ln_z,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=100,treat="RuralZIP",mediator="FFQ_vegetables_ln_z")
+summary(mediate_result)
+summary(mb)
+summary(mc)
+
+```
+
+Nope.
+
+So the summary?
+
+SES (measured by household income) mediates but does not fully explain rural-urban BMI differences. Neighborhood food availability may be related to this, but is only a significant mediator if we leave out SES. SES is a much stronger mediator and explains more o the difference, although there is still a difference.
+
+Exercise, EDM,  and diet don't appear to mediate the relationship.
+
+
+
+
+Some of the new meaures of FFQ track SES, unlike the old measures I have been using. So perhaps once we implement those, we'll see a result.
+
+
+## Prior literature
+
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6138992/
+
+Population-level socioeconomic variables explain about 50% of age-adjusted mortality, and our story is consistent with this.
+
+
+Obesity is mostly (75%) genetic; if we can explain, say, 5% of the variance of obesity with non-genetic effects, we're explaining a lot of it. But then, pretty much any effect we might measure (race, gender, self control, food consumption) themselves have a genetic component.
+
+## Further things to check
+
+Moving forward:
+
+ - Does this change with the new FFQ?
+ - Try to replicate this finding in the HINTS dataset--don't think we have healthy food availability, does have SES, probably
+ 
+ 
+## Does the story hold for high BMIs?
+
+
+```{r}
+library(mediation)
+
+data_to_measure <- preprocessed_data %>% filter(!is.na(BMI) & BMI>=26.0)
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(MESA_healthyfoodavailability~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,data_to_measure)
+mc <- lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+MESA_healthyfoodavailability,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=100,treat="RuralZIP",mediator="MESA_healthyfoodavailability")
+summary(mediate_result)
+summary(mc)
+
+```
+
+ahh--we don't have a rural urban difference amongst overweight populations and so threi sn't going to be a mediation.
+
+
+## Finally, correlations of these key variables we've been examining
+
+```{r}
+corrplot::corrplot(
+  cor(preprocessed_data %>% select("RuralZIP_i","aSES_02","MESA_healthyfoodavailability","FFQ_fruits_ln_z","BMI" #,"FFQ_vegetables_ln_z","cancer_promoting_minus_preventing_FFQ"
+                                   ),use = "pairwise.complete.obs"),
+  method="number",
+  type="upper",
+  diag=FALSE,
+  tl.srt=45,
+  insig="blank",col="black"
+)
+
+
+```
+```{r,fig.width=16,fig.height=16}
+# install.packages("ggplot2")            # Packages need to be installed only once
+# install.packages("GGally")
+#  
+library("ggplot2")                     # Load ggplot2 package
+library("GGally")
+
+FFQ_cols <- colnames(preprocessed_data)[grepl("FFQ_",colnames(preprocessed_data))]
+corrplot::corrplot(
+  cor(preprocessed_data %>% dplyr::select(c("RuralZIP_i","aSES_02","MESA_healthyfoodavailability","BMI",FFQ_cols)),use = "pairwise.complete.obs")[1:4,],
+  method="number",
+  type="upper",
+  diag=FALSE,
+  tl.srt=30,
+  tl.cex=1,
+  number.cex=1,
+  #cl.lim=c(-0.3,0.3),
+  col=colorRampPalette(c("red","red","red","red","black","blue","blue","blue","blue"))(200),
+  insig="blank"
+)
+
+#ggpairs(preprocessed_data %>% dplyr::select(c("MESA_healthyfoodavailability","BMI",FFQ_cols)))
+```
+```{r,fig.width=16,fig.height=16}
+
+preprocessed_data %<>% group_by(Gender3C) %>% mutate(
+  BMI_bsexnormedzs = (BMI-mean(BMI,na.rm = TRUE))/sd(BMI,na.rm = TRUE)) %>% ungroup
+
+FFQ_cols <- colnames(preprocessed_data)[grepl("FFQ_",colnames(preprocessed_data))]
+corrplot::corrplot(
+  cor(preprocessed_data %>% dplyr::select(c("RuralZIP_i","aSES_02","MESA_healthyfoodavailability","BMI","BMI_bsexnormedzs",FFQ_cols)),use = "pairwise.complete.obs")[1:5,],
+  method="number",
+  type="upper",
+  diag=FALSE,
+  tl.srt=30,
+  tl.cex=1,
+  number.cex=1,
+  #cl.lim=c(-0.3,0.3),
+  col=colorRampPalette(c("red","red","red","red","black","blue","blue","blue","blue"))(200),
+  insig="blank"
+)
+```
+
+
+```{r,fig.width=16,fig.height=16}
+ffq_cormat <- cor(preprocessed_data %>% dplyr::select(c(FFQ_cols)),use = "pairwise.complete.obs")#[5,]
+corrplot::corrplot(
+  ffq_cormat,#[5:nrow(ffq_cormat),],
+  method="number",
+  type="upper",
+  diag=FALSE,
+  tl.srt=30,
+  tl.cex=1,
+  number.cex=1,
+  #cl.lim=c(-0.3,0.3),
+  col=colorRampPalette(c("pink","red","black","blue","cyan"))(200),
+  insig="blank"
+)
+```
+
+
+
+```{r}
+FFQ_cols <- colnames(preprocessed_data)[grepl("FFQ_",colnames(preprocessed_data))]
+for (ffqc in FFQ_cols){
+  print(ffqc)
+  print(mean(preprocessed_data[[ffqc]],na.rm=TRUE))
+  print(paste0(ffqc,"_ln_z"))
+  preprocessed_data[[paste0(ffqc,"_ln_z")]] <-preprocessed_data[[ffqc]] %>% as.numeric %>% log %>% zscore
+  #print(preprocessed_data[[ffqc]] %>% as.numeric %>% log %>% zscore %>% mean(na.rm=TRUE))
+}
+# preprocessed_data$FFQ_fruits_ln_z <- as.numeric(preprocessed_data$FFQ_fruits) %>% log %>% zscore
+# preprocessed_data$FFQ_vegetables_ln_z <- as.numeric(preprocessed_data$FFQ_vegetables) %>% log %>% zscore
+
+```
+
+```{r,fig.width=16,fig.height=16}
+FFQ_ln_z_cols <- colnames(preprocessed_data)[grepl("FFQ_.*_ln_z",colnames(preprocessed_data))]
+corrplot::corrplot(
+  cor(preprocessed_data %>% dplyr::select(c("RuralZIP_i","aSES_02","MESA_healthyfoodavailability","BMI","BMI_bsexnormedzs",FFQ_ln_z_cols[1:15])),use = "pairwise.complete.obs")[1:5,],
+  method="number",
+  type="upper",
+  diag=FALSE,
+  tl.srt=30,
+  tl.cex=1,
+  number.cex=1,
+  #cl.lim=c(-0.3,0.3),
+  col=colorRampPalette(c("red","red","red","red","black","blue","blue","blue","blue"))(200),
+  insig="blank"
+)
+```
+
+```{r}
+print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,preprocessed_data )))
+print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+FFQ_fruits_ln_z+FFQ_grains_ln_z+FFQ_vegetables_ln_z,preprocessed_data )))
+print(summary(lm(BMI~RuralZIP+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+FFQ_fruits_ln_z+FFQ_grains_ln_z+FFQ_vegetables_ln_z+aSES_02,preprocessed_data )))
+```
+

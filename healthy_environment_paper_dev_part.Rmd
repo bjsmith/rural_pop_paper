@@ -1,0 +1,103 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+This notebook tracks the healthy environment paper where we present a pre-registered finding that having a healthier food environment is associated with lower BMIs, controlling for race, gender, and age.
+
+We'll work across three datasets here: DEV, the ORFCS, and HINTS.
+
+First, we need to do the pre-registered finding exactly as presented. It was for the ORFCS, so we need to load that first.
+
+```{r}
+library(stringr)
+library(rstatix)
+```
+
+```{r}
+library(magrittr)
+library(dplyr)
+
+
+
+data_dir <- "/Users/benjaminsmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/"
+
+preprocessed_data_filepath <- paste0(data_dir,"cloudresearch_survey_results/orfcs_preprocessed_anon_by_subj.csv")
+library(readr)
+library(ggplot2)
+library(GGally)
+preprocessed_data_raw <- readr::read_csv(preprocessed_data_filepath)
+
+
+rows_to_remove <- ((preprocessed_data_raw$EDM_forwardscore<2 & preprocessed_data_raw$EDM_reversescored>4) |
+  (preprocessed_data_raw$EDM_forwardscore>=4.5 & preprocessed_data_raw$EDM_reversescored<2))
+rows_to_remove[is.na(rows_to_remove)]<-FALSE
+sum(rows_to_remove)
+sub_ids_to_remove <- preprocessed_data_raw[rows_to_remove,"SID"]
+preprocessed_data <- preprocessed_data_raw %>% filter((SID %in% unlist(sub_ids_to_remove))==FALSE)
+
+
+preprocessed_data$DEMO_Age_c <- preprocessed_data$DEMO_Age-38 #using U.S. median age
+
+preprocessed_data$RaceCategorical<-factor(preprocessed_data$RaceCategorical,levels=unique(preprocessed_data$RaceCategorical))
+
+preprocessed_data$RuralZIP_i <- as.numeric(preprocessed_data$RuralZIP)
+preprocessed_data$RaceCategorical2 <- as.character(preprocessed_data$RaceCategorical)
+preprocessed_data$RaceCategorical2[preprocessed_data$RaceCategorical2=="RaceNotReported"] <- "OtherRaceRaceNotReported"
+preprocessed_data$RaceCategorical2[preprocessed_data$RaceCategorical2=="OtherRace"] <- "OtherRaceRaceNotReported"
+preprocessed_data$RaceCategorical2 <-factor(preprocessed_data$RaceCategorical2,levels=names(sort(table(preprocessed_data$RaceCategorical2),decreasing=TRUE)))
+
+#need to remove this one data point for data quality issue.
+preprocessed_data[!is.na(preprocessed_data$WEIGHT) & preprocessed_data$WEIGHT>500,c("WEIGHT","WEIGHT_kg","BMI")] <- NA
+rm(preprocessed_data_raw)
+orfcs_dataset<-preprocessed_data
+```
+
+```{r}
+#put self-report items in z-score. It wont' change the estimate but it will make it easier to interpret
+zscore <- function(x){
+  return((x-mean(x,na.rm=TRUE))/sd(x,na.rm=TRUE))
+}
+```
+### Load that DEV dataset
+
+
+```{r}
+
+dropbox_file_dir = "~/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/"
+
+source("../dev_load_functions.R")
+
+dev_data_by_ppt <- get_complete_data_by_ppt(dropbox_file_dir)
+```
+
+
+```{r}
+dev_data_by_ppt %<>% 
+  mutate(
+    MESA_healthyfoodavailability_z =zscore(MESA_healthyfoodavailability),
+    MESA_safetyfromcrime_z =zscore(MESA_safetyfromcrime),
+    cancer_promoting_minus_preventing_FFQ_z = zscore(cancer_promoting_minus_preventing_FFQ),
+    age365_c = age365 - mean(age365,na.rm=TRUE) #center age, but do not z-score it.
+  )
+```
+
+### Right, now; what did we want to get out of the DEV dataset?
+
+```{r}
+predict_bmi <- lm(bmi~cancer_promoting_minus_preventing_FFQ_z+
+                    age365_c+birthsex_factor+RaceCategorical,
+                  dev_data_by_ppt)
+summary(predict_bmi)
+
+predict_bf_1 <- lm(bf_1~cancer_promoting_minus_preventing_FFQ_z+
+                    age365_c+birthsex_factor+RaceCategorical,
+                  dev_data_by_ppt)
+summary(predict_bf_1)
+
+```
+
+While we can't confirm the relationship between BMI and FFQ in the DEV dataset, we do see a relationship between Body Fat Percentage and FFQ.
+

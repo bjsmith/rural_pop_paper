@@ -1,0 +1,156 @@
+---
+title: "Replicate teh result in DEV"
+output: html_notebook
+---
+
+
+```{r}
+#install.packages("tidystats")
+library(stringr)
+library(dplyr)
+library(ggplot2)
+library(rstatix)
+
+dropbox_file_dir = "~/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/"
+```
+
+
+```{r}
+source("../dev_load_functions.R")
+
+```
+
+
+### test correlations, transform
+
+
+```{r}
+data_by_ppt <- get_complete_data_by_ppt(dropbox_file_dir)
+```
+
+
+#### outlier removal
+
+https://www.active.com/fitness/calculators/bodyfat
+
+Classification	Women (% Fat)	Men (% Fat)
+Essential Fat	10-12%	2-4%
+Athletes	14-20%	6-13%
+Fitness	21-24%	14-17%
+Acceptable	25-31%	18-25%
+Obese	32% +	25% +
+
+
+
+With ~200 subjects, how often would we expect subjects 2 or 3 or 4 SD outside the mean?
+
+<!-- ```{r} -->
+<!-- readr::write_csv(data_by_ppt, file = paste0(data_path,"data_by_ppt_environment_analysis.csv")) -->
+
+
+<!-- ``` -->
+
+### analysis replicating findings from the rural pop survey in dev
+
+
+> To measure the effect of community on eating behavior and health, we will use two linear models to predict (1) eating behavior and (2) health outcome from
+> (a) Community healthy food environment
+> (b) Community safety
+> (c) self-report confounding variables PSS-4
+> (d) demographic confounders relating to age and race
+
+First of all, let's look at hte relationship between [classical] FFQ and BMI:
+
+```{r}
+predict_bmi <- lm(bmi~cancer_promoting_minus_preventing_FFQ+
+                    age365+birthsex_factor+RaceCategorical,
+                  data_by_ppt)
+summary(predict_bmi)
+
+predict_bf_1 <- lm(bf_1~cancer_promoting_minus_preventing_FFQ+
+                    age365+birthsex_factor+RaceCategorical,
+                  data_by_ppt)
+summary(predict_bf_1)
+
+
+predict_bf_1 <- lm(bf_1~FFQ_fruit_and_vege+
+                    age365+birthsex_factor+RaceCategorical,
+                  data_by_ppt)
+summary(predict_bf_1)
+
+```
+
+
+```{r}
+
+predict_bmi <- lm(bmi~cancer_promoting_minus_preventing_FFQ+
+                    age365+I(age365^2)+birthsex_factor+RaceCategorical,
+                  data_by_ppt)
+summary(predict_bmi)
+
+predict_bf_1 <- lm(bf_1~cancer_promoting_minus_preventing_FFQ+
+                    age365+I(age365^2)+birthsex_factor+RaceCategorical,
+                  data_by_ppt)
+summary(predict_bf_1)
+
+
+predict_bf_1 <- lm(bf_1~FFQ_fruit_and_vege+
+                    age365+I(age365^2)+birthsex_factor+RaceCategorical,
+                  data_by_ppt)
+summary(predict_bf_1)
+```
+
+OK, so BF% relates to FFQ, but we can't find any other relationship.
+
+
+
+
+
+
+```{r}
+predict_bmi <- lm(bmi~age365+RaceCategorical+MESA_healthyfoodavailability+MESA_safetyfromcrime,
+                  data_by_ppt)
+summary(predict_bmi)
+
+predict_bf_1 <- lm(bf_1~age365+RaceCategorical+MESA_healthyfoodavailability+MESA_safetyfromcrime,
+                  data_by_ppt)
+summary(predict_bf_1)
+
+predict_FFQ <- lm(cancer_promoting_minus_preventing_FFQ~age365+RaceCategorical+MESA_healthyfoodavailability+MESA_safetyfromcrime,
+                  data_by_ppt)
+summary(predict_FFQ)
+
+```
+
+What if we stretch out FFQ and MESA_healthyfoodavailability a bit?
+
+```{r}
+hist(data_by_ppt$MESA_healthyfoodavailability,breaks = 20)
+
+invln <- function(x){
+  x_invln <- log(max(x,na.rm = T)+1-x)
+  new_top <- max(x_invln,na.rm=T)
+  return(new_top-x_invln)
+}
+data_by_ppt$MESA_healthyfoodavailability_invln<-invln(data_by_ppt$MESA_healthyfoodavailability)
+data_by_ppt$MESA_safetyfromcrime_invln<-invln(data_by_ppt$MESA_safetyfromcrime)
+hist(data_by_ppt$MESA_healthyfoodavailability_invln,breaks = 20)
+```
+
+
+
+
+```{r}
+predict_bmi <- lm(bmi~age365+RaceCategorical+MESA_healthyfoodavailability_invln+MESA_safetyfromcrime_invln,
+                  data_by_ppt)
+summary(predict_bmi)
+
+predict_bf_1 <- lm(bf_1~age365+RaceCategorical+MESA_healthyfoodavailability_invln+MESA_safetyfromcrime_invln,
+                  data_by_ppt)
+summary(predict_bf_1)
+
+predict_FFQ <- lm(cancer_promoting_minus_preventing_FFQ~age365+RaceCategorical+MESA_healthyfoodavailability_invln+MESA_safetyfromcrime_invln,
+                  data_by_ppt)
+summary(predict_FFQ)
+
+```

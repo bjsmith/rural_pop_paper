@@ -1,0 +1,16 @@
+default:
+  hints_protected_data_folderpath: /Users/benjaminsmith/Dropbox (University of Oregon)/protected_files_ben_only/protected_HINTS_data
+  rubric_dir: /Users/benjaminsmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/DEV_scoring_rubrics
+  qualtrics_credentials: ~/qualtrics_credentials.yaml  
+  orfcs_shareable_folder: /Users/benjaminsmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/shareable/
+Benjamins-MacBook-Pro-2.local:
+  hints_protected_data_folderpath: /Users/benjaminsmith/Dropbox (University of Oregon)/protected_files_ben_only/protected_HINTS_data
+  rural_data_dir: /Users/benjaminsmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/
+  rubric_dir: /Users/benjaminsmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/DEV_scoring_rubrics
+  qualtrics_credentials: ~/qualtrics_credentials.yaml  
+UO-2010763:
+  hints_protected_data_folderpath: /Users/bensmith/Dropbox (University of Oregon)/protected_files_ben_only/protected_HINTS_data
+  rural_data_dir: /Users/bensmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/
+  dev_dropbox_data_dir: 
+  rubric_dir: /Users/bensmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/DEV_scoring_rubrics
+  qualtrics_credentials: ~/qualtrics_credentials.yaml

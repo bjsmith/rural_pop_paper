@@ -1,0 +1,128 @@
+---
+title: "Generate shareable data"
+output: html_notebook
+---
+
+This file anonymizes our dataset to ensure it is shareable publicly.
+
+The following steps are taken to ensure anonymity:
+
+ - no ZIP codes are shared.
+ - height and weight are not shared, though BMI is.
+
+We won't on-share HINTS data, but should provide a script that generates it.
+
+
+```{r message=FALSE, warning=FALSE}
+Sys.setenv(R_CONFIG_ACTIVE = Sys.info()["nodename"])
+
+library(tidyverse)
+library(dplyr)
+library(lavaan)
+#source("HINTS_preprocessing.R")
+source("orfcs_utilities.R")
+#hints5 <-get_hints5(location=config::get("hints_protected_data_folderpath"))
+#boot_times<-100
+
+zscore <- function(x){
+    return((x-mean(x,na.rm=TRUE))/sd(x,na.rm=TRUE))
+}
+```
+
+
+
+```{r}
+library(magrittr)
+library(dplyr)
+
+
+
+data_dir <- config::get("rural_data_dir")
+
+preprocessed_data_filepath <- paste0(data_dir,"cloudresearch_survey_results/orfcs_preprocessed2_anon_by_subj.csv")
+key_filepath <- paste0(data_dir,"cloudresearch_survey_results/ORFCS Bespoke CR2_November 2, 2021_11.47_key.csv")
+library(readr)
+library(ggplot2)
+library(GGally)
+orfcs_dataset <- readr::read_csv(preprocessed_data_filepath)
+
+```
+
+```{r}
+colnames(orfcs_dataset)
+```
+
+```{r}
+cols_to_select <- (
+  grepl("EAFH_", colnames(orfcs_dataset)) |
+  grepl("EDM_", colnames(orfcs_dataset)) | 
+  grepl("FCI_", colnames(orfcs_dataset)) | 
+  grepl("FFQ_", colnames(orfcs_dataset)) | 
+  grepl("IPAQ_", colnames(orfcs_dataset)) | 
+  grepl("IPAQ_", colnames(orfcs_dataset)) | 
+  grepl("MESA_", colnames(orfcs_dataset)) | 
+  grepl("BMI", colnames(orfcs_dataset)) | 
+  grepl("RuralZIP", colnames(orfcs_dataset)) | 
+  grepl("ZipcodeMedianHouseholdIncome", colnames(orfcs_dataset)) | 
+  grepl("cancer", colnames(orfcs_dataset)) | 
+  grepl("Gender3C", colnames(orfcs_dataset)) | 
+  grepl("RaceC2", colnames(orfcs_dataset)) | 
+  grepl("Education_Categorical", colnames(orfcs_dataset)) | 
+  grepl("PSS", colnames(orfcs_dataset)) | 
+  grepl("aSES", colnames(orfcs_dataset)) |
+  grepl("DEMO_Age", colnames(orfcs_dataset)) |
+  grepl("DEMO_Age_c", colnames(orfcs_dataset)) |
+  grepl("PSS_z", colnames(orfcs_dataset))
+)
+ds_shareable_columns <- orfcs_dataset[,colnames(orfcs_dataset)[cols_to_select]]
+  
+
+```
+
+
+```{r}
+#- participants from minority race or gender groups have zip codes removed. data will only display "rural" or "urban"
+# - participants from a zip code with fewer than 20 subjects are also removed.
+
+#need to round zipcode median income so they're not identifiable
+
+ds_shareable_columns$ZipcodeMedianHouseholdIncome <- round(ds_shareable_columns$ZipcodeMedianHouseholdIncome / 5000)*5000
+zipcode_low_frequencies <- as.integer(names(which(table(ds_shareable_columns$ZipcodeMedianHouseholdIncome)<20)))
+minority_gender <- "Other"
+
+#races are grouped so there is no race that is in a minority...
+
+#ensure that people in zipcodes that might be identifiable (less than 20) have zipcode hint removed if they're a minority
+anon_subjs <-(  (ds_shareable_columns$ZipcodeMedianHouseholdIncome %in% zipcode_low_frequencies) & 
+    (ds_shareable_columns$Gender3C==minority_gender)
+)
+if (sum(anon_subjs,na.rm = TRUE)){
+  ds_shareable_columns[anon_subjs]$ZipcodeMedianHouseholdIncome <- NA
+}
+#there are none, I don't think, but just in case.
+
+```
+ 
+ 
+need to check Demographics comprehensively
+
+```{r}
+col_key <- read_csv(key_filepath)
+col_key <- col_key[names(col_key) %in% colnames(ds_shareable_columns)]
+
+cols_to_rename_from_key <- unlist(col_key[grepl("aSES",names(col_key))][1,])
+ds_shareable_columns <- ds_shareable_columns %>% 
+  #select(colnames(ds_shareable_columns)[grepl("aSES", colnames(ds_shareable_columns))]) %>%
+  rename_with( ~ cols_to_rename_from_key[.x],.cols=names(cols_to_rename_from_key)) %>%
+  rename(`Included as houshold member Spouse`=aSES_04a_1, `Included as houshold member Children`=aSES_04a_2, `Included as houshold member Others`=aSES_04a_3)
+
+ds_shareable_columns$aSES_02_z
+ds_shareable_columns$BMI <-round(ds_shareable_columns$BMI,1)
+ds_shareable_columns$BMI_c <-NULL
+
+```
+
+```{r}
+write_csv(ds_shareable_columns,file=paste0(data_dir,"shareable/oregon_dataset_anon.csv"))
+```
+

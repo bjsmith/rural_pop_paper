@@ -1,0 +1,186 @@
+---
+title: "explore_orfcs_pilot_results"
+author: "Ben Smith"
+date: "10/19/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+
+library(dplyr)
+
+source("orfcs_utilities.R")
+```
+
+
+we are primarily interested in ZIP code.
+
+Get the results from pilot 1
+
+The ZIP Code data is best used with the DEMO_6 field. Participants entered this one more than they did the one in address. But we should also check to see how many filled out address information.
+
+```{r}
+
+data_dir <- "/Users/benjaminsmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/"
+
+full_merged_results <- get_orfcs_survey_data(data_dir)
+
+full_merged_results$PptZIPCode<-full_merged_results$DEMO_6
+
+#Based on `match_ppt_to_ruca_with_zip_code.Rmd`.
+#Now we want to get the RUCA codes.
+#Now, match the participant ZIP Codes to the RUCA 2010
+ppts_with_zip_ruca <- match_ppts_with_ruca_zipcode(data_dir, full_merged_results)
+```
+
+
+
+
+The research objectives of the [grant](https://grants.nih.gov/grants/guide/rfa-files/RFA-CA-20-051.html) say:
+
+> The purpose of this FOA is to solicit applications to develop, adapt, and test individual-, community- or multilevel interventions to address modifiable risk factors for cancer in rural populations, as defined by USDA Rural-Urban Continuum Codes (RUCC) 4-9, Rural-Urban Commuting Area (RUCA) codes 4-10, or Frontier and Remote (FAR) areas level 4.
+
+So which subjects do we have at levels 4-10? Based on ZIP Code, we have
+
+```{r}
+ppts_with_zip_ruca$ClassifiedRural <- ppts_with_zip_ruca$RUCA1>=4
+```
+
+```{r}
+ruca1010_zip_code_ruca_description_table
+```
+```{r}
+table(ppts_with_zip_ruca$ClassifiedRural)
+table(is.na(ppts_with_zip_ruca$ClassifiedRural))
+```
+
+
+```{r}
+table(ppts_with_zip_ruca$Description,ppts_with_zip_ruca$ClassifiedRural)
+
+```
+
+
+HOw complete is the data?
+
+```{r}
+ppts_with_zip_ruca$provided_address <- !is.na(ppts_with_zip_ruca$Address_1) & !is.na(ppts_with_zip_ruca$AddressNum_1) & !is.na(ppts_with_zip_ruca$Address_2)
+ppts_with_zip_ruca$provided_latlng <- !is.na(ppts_with_zip_ruca$geo_lat)
+ppts_with_zip_ruca$provided_address_or_latlng <- ppts_with_zip_ruca$provided_address | ppts_with_zip_ruca$provided_latlng
+
+table(ppts_with_zip_ruca$provided_address_or_latlng,ppts_with_zip_ruca$survey)
+
+```
+
+
+```{r}
+table(ppts_with_zip_ruca$ClassifiedRural,ppts_with_zip_ruca$survey,ppts_with_zip_ruca$Finished)
+```
+
+
+```{r}
+table(ppts_with_zip_ruca$ClassifiedRural,ppts_with_zip_ruca$provided_address_or_latlng)
+```
+
+```{r}
+chisq.test(ppts_with_zip_ruca$ClassifiedRural,ppts_with_zip_ruca$provided_address_or_latlng)
+```
+
+## rejections
+
+
+```{r}
+ppts_with_zip_ruca$TooShort <- ppts_with_zip_ruca$`Duration (in seconds)`<600
+
+ppts_with_zip_ruca$IncludeStatus <- "Include"
+```
+
+We'll do this iteratively--some are very easy cases, some less so. First participants who were not marked finish and have taken less than 60 seconds:
+
+
+```{r}
+ppts_with_zip_ruca[(ppts_with_zip_ruca$`Duration (in seconds)` < 60 & ppts_with_zip_ruca$Finished==FALSE),"IncludeStatus"] <- "Exclude, Unfinished and less than 60 seconds"
+print(table(ppts_with_zip_ruca$IncludeStatus))
+```
+
+Now, those who took less than 10 minutes and missed most questions--probably just take a sum NA across rows.
+
+```{r}
+ppts_with_zip_ruca$NA_Count <- rowSums(is.na(ppts_with_zip_ruca))
+
+hist(ppts_with_zip_ruca$NA_Count,breaks = (0:35)*10)
+
+```
+OK great--who are the people who have about 100 missing?
+
+```{r}
+ppts_with_zip_ruca %>% filter(NA_Count>70 & NA_Count<110 & IncludeStatus=="Include")
+```
+
+They generally missed the FCI_B but filled in most other items.
+
+Then there are a few people who missed many more items than that...
+
+```{r}
+library(ggplot2)
+
+
+ppts_with_zip_ruca$DurationInMinutes <- ppts_with_zip_ruca$`Duration (in seconds)`/60
+ggplot(ppts_with_zip_ruca %>% filter(IncludeStatus=="Include"),aes(NA_Count,DurationInMinutes))+geom_point()+scale_y_log10(breaks=c(1,2,5,10,20,30,60,120))
+```
+
+I'd like to exclude subjects who:
+ - took less than 5 minutes --all of these were missing very many items
+ - had more than 200 columns missing
+ 
+ 
+There's a small group who had a lot of items missing but did take 5-30 minutes who we will give the benefit of the doubt.
+
+```{r}
+ppts_with_zip_ruca
+```
+
+```{r}
+ppts_with_zip_ruca[(ppts_with_zip_ruca$IncludeStatus=="Include") & (ppts_with_zip_ruca$`Duration (in seconds)` < 60*5) & (ppts_with_zip_ruca$NA_Count>100),"IncludeStatus"]<-
+  "Exclude, more than 100 missing columns and under 5 minute responses"
+
+ppts_with_zip_ruca[ppts_with_zip_ruca$IncludeStatus=="Include" & ppts_with_zip_ruca$NA_Count>200,"IncludeStatus"]<-
+  "Exclude, more than 200 missing columns"
+
+table(ppts_with_zip_ruca$IncludeStatus)
+
+```
+
+
+```{r}
+ggplot(ppts_with_zip_ruca,aes(NA_Count,DurationInMinutes,color=IncludeStatus))+geom_point()+scale_y_log10(breaks=c(10/60,0.5,1,2,5,10,20,30,60,120))+
+  guides(color=guide_legend(nrow=2,byrow=TRUE,position="bottom"))+
+  theme(legend.position="bottom")
+```
+```{r}
+ppts_with_zip_ruca %>% filter(IncludeStatus=="Exclude, more than 200 missing columns") %>% View
+```
+
+```{r}
+participant_exclusion_list <- ppts_with_zip_ruca %>% select(aid,survey,`Duration (in seconds)`,NA_Count,Finished,IncludeStatus) %>% filter(IncludeStatus!="Include")
+
+```
+
+
+```{r}
+table(ppts_with_zip_ruca$ClassifiedRural,ppts_with_zip_ruca$IncludeStatus,ppts_with_zip_ruca$survey)
+```
+
+```{r}
+table(participant_exclusion_list$IncludeStatus)
+table(is.na(participant_exclusion_list$IncludeStatus))
+
+
+```
+
+```{r}
+readr::write_csv(participant_exclusion_list,file=paste0(data_dir, "cloudresearch_survey_results/exclude_subjects.csv"))
+```
+

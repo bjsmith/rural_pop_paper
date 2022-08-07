@@ -1,0 +1,114 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+cwd<-getwd()
+
+data_dir <- "/Users/bensmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/"
+
+setwd(data_dir)
+
+source("DEV2-RuralVsUrbanDataExam_R_2021-01-21_2323.r")
+
+#setwd(cwd)
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+```{r}
+#let's use good old data.table, I miss it
+library(data.table)
+library(dplyr)
+
+dev2_ru_dt_all_sessions<- data.table(data)
+
+dev2_ru_session01 <- dev2_ru_dt_all_sessions[redcap_event_name %in% c("session_0_arm_1","t1_arm_1","session_1_arm_1")]
+
+
+
+```
+
+Let's get some participant information....
+
+```{r}
+ppt_id <- c("dev_id","date_0","address","birthsex","dob","race___1","race___2","race___3","race___4","race___5","race___6","race___7","race___8","age")
+#only store info relevant to participant ID
+participant_list_raw <- dev2_ru_session01[,ppt_id,with=FALSE]
+#now remove missing data columns
+blank_by_row <- rowSums(is.na(participant_list_raw))+rowSums(participant_list_raw=="",na.rm = TRUE)
+#remove rows with the least amount of information
+ppt_list_clean.1 <- participant_list_raw[blank_by_row<max(blank_by_row)]
+ppt_list_clean <- ppt_list_clean.1[stringr::str_detect(ppt_list_clean.1$dev_id,"DEV\\d\\d\\d") & ppt_list_clean.1$dob!="",]
+
+```
+
+
+Great. Now let's get zipcodes for the participants
+
+
+```{r}
+#https://www.oreilly.com/library/view/regular-expressions-cookbook/9781449327453/ch04s14.html
+ppt_list_clean$ZIPCode <- stringr::str_extract(trimws(ppt_list_clean$address),"[0-9]{5}(?:-[0-9]{4})?$")
+#We have to remove participants where we didn't have addresses.
+ppt_list_clean <- ppt_list_clean[!is.na(ppt_list_clean$address) & ppt_list_clean$address!=""]
+
+#manually add a couple of zipcodes that were entered incorrectly but can be human-deduced
+source(paste0(data_dir,"manual_tag_zipcodes.R"))
+
+#remove entries where we really can't tag a zip, even manually.
+ppt_list_clean <- ppt_list_clean[!is.na(ZIPCode)]
+
+#remove address, and remove some tables we don't need anymore
+ppt_list_clean$address <- NULL
+rm(ppt_list_clean.1)
+rm(participant_list_raw)
+```
+
+Useful:
+https://mcdc.missouri.edu/applications/geocorr2014.html
+
+
+```{r}
+#this 
+county_zip_table <- readr::read_csv(paste0(data_dir,"geocorr2014.csv"),skip = 1)# %>% filter(zipname=="Los Angeles, CA")
+county_zip_table %>% filter (`County code`=="41039")
+```
+
+Let's take a look at the different county codes on offer.
+
+```{r}
+library(readxl)
+
+rucc2013<-readxl::read_xls(paste0(data_dir,"ruralurbancodes2013.xls"),sheet="Rural-urban Continuum Code 2013")
+
+rucc2013_codes_list <- rucc2013 %>% select(RUCC_2013,Description) %>% arrange(. , RUCC_2013) %>% unique
+rucc2013_codes_list
+```
+```{r}
+rucc_brief <- rucc2013 %>% select(FIPS,State,RUCC_2013)
+```
+
+Now we can code the ZIP codes with RUCC codes
+```{r}
+zip_to_rucc <- county_zip_table %>% select(`ZIP census tabulation area`,`County code`,`State abbreviation`) %>% merge(rucc_brief,by.x = "County code",by.y="FIPS")
+zip_to_rucc$`ZIP census tabulation area` <- as.character(zip_to_rucc$`ZIP census tabulation area`) #store ZIP code as character to avoid confusion
+
+```
+
+```{r}
+ppt_list_with_rucc <- merge(ppt_list_clean,data.table(zip_to_rucc),by.x="ZIPCode",by.y="ZIP census tabulation area",all.x=TRUE)
+```
+
+```{r}
+table(ppt_list_with_rucc$RUCC_2013)
+```
+
+```{r}
+
+```
+

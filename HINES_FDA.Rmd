@@ -1,0 +1,91 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(foreign)
+library(stringr)
+library(dplyr)
+library(ggplot2)
+```
+
+```{r}
+#hines_2020_raw<-read.spss(hines_location, use.value.label=TRUE,to.data.frame=TRUE)
+
+hines_locations <- Sys.glob(file.path("/Users/benjaminsmith/Google Drive/oregon/data/protected_HINTS_data/","*/Hints_fda*.sav"))
+
+raw_file_list <- vector(mode="list",length<-length(hines_locations))
+
+for (i in 1:length(raw_file_list)){
+  hines_filepath <- hines_locations[[i]]
+  filename <- basename(hines_filepath)
+  spss_rawfile <- read.spss(hines_filepath, use.value.label=TRUE,to.data.frame=TRUE)
+  spss_rawfile[["filename"]] <- filename
+  raw_file_list[[i]] <- spss_rawfile
+}
+
+```
+
+```{r}
+
+detect_key_cols <- function(spss_item){
+    print(spss_item[["filename"]][[1]])
+    print("Race_Cat2" %in% colnames(spss_item))
+    print(paste0("PR_RUCA_2010", "PR_RUCA_2010" %in% colnames(spss_item)))
+    print(paste0("RUC2013", "RUC2013" %in% colnames(spss_item)))
+    
+    print("Age" %in% colnames(spss_item))
+    print("BMI" %in% colnames(spss_item))
+}
+
+
+#lapply(raw_file_list,detect_key_cols)
+detect_key_cols(spss_rawfile)
+
+```
+
+So let's just join cycle 5, because all but one of cycle 4 have rural-urban zoning data, and none have RUCA.
+
+
+
+To join these we need to do something about all these columns that are different. So let's find the intersection of columns that are in all items.
+
+```{r}
+shared_colnames <- colnames(raw_file_list[[1]])
+for (i in 2:length(raw_file_list)){
+  shared_colnames <- intersect(colnames(raw_file_list[[i]]),shared_colnames)
+}
+
+#we want a few eextra important columns of interest
+cols_to_use <- c(shared_colnames,"Fruit","Vegetables")
+
+#then trim each file back to just these shared columns.
+#we've checked it will include the ones we want.
+file_list_trimmed <- lapply(
+  raw_file_list,
+  function(cycle_5_df){
+    return(cycle_5_df[intersect(cols_to_use,colnames(cycle_5_df))])
+  }
+  
+)
+
+```
+
+
+
+```{r}
+table(spss_rawfile$RUC2013)
+HINTS_fda <- spss_rawfile
+```
+OK, so I don't think we need to tidy this up, we just need to use a bit of regex to process this into our boolean rural item.
+
+```{r}
+
+#preprocess
+HINTS_fda$Age <- as.numeric(as.character(HINTS_fda$Age))
+HINTS_fda$BMI <- as.numeric(as.character(HINTS_fda))
+
+HINTS_fda$Age_c <- HINTS_fda$Age-38 #using U.S. median age
+```
+OK, we can't proceed with this because we have no measure of health outcome--not BMI or anything else.

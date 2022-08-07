@@ -1,0 +1,705 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+
+```{r}
+library(magrittr)
+library(dplyr)
+
+```
+
+
+```{r}
+data_dir <- "/Users/benjaminsmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/"
+
+preprocessed_data_filepath <- paste0(data_dir,"cloudresearch_survey_results/orfcs_preprocessed_anon_by_subj.csv")
+library(readr)
+library(ggplot2)
+library(GGally)
+preprocessed_data_raw <- readr::read_csv(preprocessed_data_filepath)
+
+
+
+
+```
+
+A few preprocessed data points:
+
+## Data quality check
+
+So the reverse score items are still reversescored in our EDM_reversescored. What is suspicious are subjects who score highly in forwardscore an low in reversescore, particularly if they're round numbers.
+
+
+
+
+
+```{r}
+ggplot(preprocessed_data_raw,aes(EDM_forwardscore,EDM_reversescored))+geom_point(alpha=0.1)
+```
+
+```{r}
+#table(preprocessed_data$EDM_forwardscore,preprocessed_data$EDM_reversescored)
+```
+
+
+OK, there are 3 subjects with high reversescored items and low forwardscored items and are clear outliers we can delete. Should probably follow up this process with a more scientific outlier detection mechanism but this will do for now.
+
+
+```{r}
+rows_to_remove <- ((preprocessed_data_raw$EDM_forwardscore<2 & preprocessed_data_raw$EDM_reversescored>4) |
+  (preprocessed_data_raw$EDM_forwardscore>=4.5 & preprocessed_data_raw$EDM_reversescored<2))
+rows_to_remove[is.na(rows_to_remove)]<-FALSE
+sum(rows_to_remove)
+sub_ids_to_remove <- preprocessed_data_raw[rows_to_remove,"SID"]
+preprocessed_data <- preprocessed_data_raw %>% filter((SID %in% unlist(sub_ids_to_remove))==FALSE)
+```
+```{r}
+preprocessed_data$RaceCategorical2 <- as.character(preprocessed_data$RaceCategorical)
+preprocessed_data$RaceCategorical2[preprocessed_data$RaceCategorical2=="RaceNotReported"] <- "OtherRaceRaceNotReported"
+preprocessed_data$RaceCategorical2[preprocessed_data$RaceCategorical2=="OtherRace"] <- "OtherRaceRaceNotReported"
+preprocessed_data$RaceCategorical2 <-factor(preprocessed_data$RaceCategorical2,levels=names(sort(table(preprocessed_data$RaceCategorical2),decreasing=TRUE)))
+
+```
+
+## Description
+
+
+reference for the analysis plan is at: https://osf.io/k7jav
+
+From the analysis plan:
+
+> People in more safer community environments and communities with healthier food environments (a) will have better eating behavior and (b) will be in better health, after controlling for perceived stress.
+
+Let's take a look at our distribution of eating behavior and health.
+
+First, health outcome, as measured by BMI:
+
+```{r}
+ggplot(preprocessed_data,aes(WEIGHT, BMI))+geom_point()+labs(title="pre-clean")
+
+
+#need to remove this one data point for data quality issue.
+preprocessed_data[!is.na(preprocessed_data$WEIGHT) & preprocessed_data$WEIGHT>500,c("WEIGHT","WEIGHT_kg","BMI")] <- NA
+
+ggplot(preprocessed_data,aes(WEIGHT, BMI))+geom_point()+labs(title="post-clean")
+```
+
+
+
+And health:
+```{r}
+
+summary(lm(BMI~FFQ_cancer_promoting+FFQ_cancer_preventing+DEMO_Age, preprocessed_data))
+```
+
+```{r}
+#gender differences STRONGLY significant.
+summary(lm(BMI~FFQ_cancer_promoting*Gender3C+FFQ_cancer_preventing*Gender3C+DEMO_Age, preprocessed_data%>% filter(Gender3C %in% c("Male", "Female"))))
+
+
+summary(lm(BMI~FFQ_cancer_promoting+FFQ_cancer_preventing+DEMO_Age, preprocessed_data %>% filter(Gender3C=="Male")))
+summary(lm(BMI~FFQ_cancer_promoting+FFQ_cancer_preventing+DEMO_Age, preprocessed_data %>% filter(Gender3C=="Female")))
+
+#try with a Sex-controlled or categorical 
+```
+
+
+```{r}
+
+ggplot(preprocessed_data %>% filter(Gender3C %in% c("Male", "Female")),
+       aes(FFQ_cancer_promoting,BMI,color=Gender3C,group=Gender3C))+geom_point(alpha=0.5)+ geom_smooth(method="lm", formula=y~x,aes(group=Gender3C))
+```
+
+
+```{r}
+ggplot(preprocessed_data %>% filter(Gender3C %in% c("Male", "Female")),
+       aes(FFQ_cancer_preventing,BMI,color=Gender3C,group=Gender3C))+geom_point(alpha=0.5)+ geom_smooth(method="lm", formula=y~x,aes(group=Gender3C))
+```
+
+
+
+```{r}
+
+hist(preprocessed_data$cancer_promoting_minus_preventing_FFQ,breaks = 20)
+
+hist(preprocessed_data$FFQ_cancer_promoting,breaks = 20)
+
+#let's create a log measure of this because it is right-skewed
+#though perhaps the danger is right-skewed as well? so I'm not sure.
+preprocessed_data$FFQ_cancer_promoting_log <- log(preprocessed_data$FFQ_cancer_promoting)
+preprocessed_data$FFQ_cancer_preventing_log <- log(preprocessed_data$FFQ_cancer_preventing)
+
+hist(preprocessed_data$FFQ_cancer_promoting_log,breaks = 20)
+
+
+ggplot(preprocessed_data,aes(FFQ_cancer_promoting, BMI))+geom_point()+labs(title="post-clean")
+ggplot(preprocessed_data,aes(cancer_promoting_minus_preventing_FFQ, BMI))+geom_point()+labs(title="post-clean")
+ggplot(preprocessed_data,aes(FFQ_cancer_preventing_log, BMI))+geom_point()+labs(title="post-clean")
+
+cor.test(preprocessed_data$cancer_promoting_minus_preventing_FFQ,preprocessed_data$BMI)
+
+cor.test(preprocessed_data$FFQ_cancer_promoting,preprocessed_data$BMI)
+cor.test(preprocessed_data$FFQ_cancer_preventing,preprocessed_data$BMI)
+cor.test(preprocessed_data$FFQ_cancer_preventing_log,preprocessed_data$BMI)
+
+```
+
+```{r }
+
+custom_points <- function(...){
+  ggally_points(...,alpha=0.2)
+}
+```
+
+```{r eval=FALSE, fig.height=14, fig.width=14, include=FALSE}
+ggpairs(preprocessed_data[c("BMI",colnames(preprocessed_data)[grepl("FFQ",colnames(preprocessed_data))])]
+        ,progress=FALSE
+        ,lower = list(continuous = custom_points)
+        )
+```
+
+
+We should use cancer_preventing as our health behavior--it seems to relate most closely with BMI. That was a bit of a suprise but there you go!
+
+Also--how many of the subcategories of cancer_promoting should we be looking at?
+
+
+Now let's look at perceived stress
+
+```{r}
+hist(preprocessed_data$PSS_sum,breaks=30)
+```
+
+OK, now we look at the harder items: community safety and food access.
+
+
+For food access, and community safety we have MESA:
+
+```{r}
+#library("ggpairs")
+pairs(preprocessed_data[c("MESA_freshproduce","MESA_healthyfoodavailability","MESA_lowfat","MESA_mean","MESA_safetyfromcrime", "MESA_neighborhoodconnectedness")])
+```
+
+
+
+
+
+> To measure the effect of community on eating behavior and health, we will use two linear models to predict (1) eating behavior and (2) health outcome from
+
+> (a) Community healthy food environment
+
+> (b) Community safety
+
+> (c) self-report confounding variables PSS-4
+
+> (d) demographic confounders relating to age and race
+
+
+
+OK great, so now we have the ability to to all of that 
+
+
+```{r}
+#need to tidy race a bit.
+
+predict_bmi <- lm(BMI~
+                    MESA_healthyfoodavailability+MESA_safetyfromcrime+PSS_sum+
+                    DEMO_Age+Gender3C+RaceCategorical,
+                  preprocessed_data)
+summary(predict_bmi)
+```
+
+```{r}
+#need to tidy race a bit.
+
+predict_bmi <- lm(BMI~
+                    MESA_healthyfoodavailability+MESA_safetyfromcrime+PSS_sum+
+                    DEMO_Age+Gender3C+RaceCategorical,
+                  preprocessed_data %>% filter(Gender3C %in% c("Male","Female")))
+summary(predict_bmi)
+```
+
+
+```{r}
+#need to tidy race a bit.
+
+predict_bmi <- lm(BMI~
+                    MESA_healthyfoodavailability+MESA_safetyfromcrime+PSS_sum+
+                    DEMO_Age+I(DEMO_Age^2)+Gender3C+RaceCategorical,
+                  preprocessed_data)
+summary(predict_bmi)
+```
+
+
+```{r}
+predict_bmi_25p <- lm(BMI~
+                    MESA_healthyfoodavailability+MESA_safetyfromcrime+PSS_sum+
+                    DEMO_Age+Gender3C+RaceCategorical,
+                  preprocessed_data %>% filter(BMI>25))
+summary(predict_bmi_25p)
+```
+
+
+
+```{r}
+predict_bmi_25p <- lm(BMI~
+                    MESA_healthyfoodavailability+MESA_safetyfromcrime+PSS_sum+
+                    DEMO_Age+I(DEMO_Age^2)+Gender3C+RaceCategorical,
+                  preprocessed_data %>% filter(BMI>25))
+summary(predict_bmi_25p)
+```
+
+
+```{r}
+predict_bmi_quad <- lm(BMI~
+                    MESA_healthyfoodavailability+I(MESA_healthyfoodavailability^2)+MESA_safetyfromcrime+PSS_sum+
+                    DEMO_Age+Gender3C+RaceCategorical,
+                  preprocessed_data)
+summary(predict_bmi_quad)
+```
+
+```{r}
+ggplot(preprocessed_data,aes(MESA_healthyfoodavailability,BMI))+
+  geom_smooth(method = "lm")+
+  geom_point(alpha=0.2)
+```
+
+
+
+```{r}
+predict_ffq <- lm(cancer_promoting_minus_preventing_FFQ~
+                    MESA_healthyfoodavailability+MESA_safetyfromcrime+PSS_sum+
+                    DEMO_Age+Gender3C+RaceCategorical,
+                  preprocessed_data)
+summary(predict_ffq)
+```
+
+
+```{r}
+predict_ffq <- lm(cancer_promoting_minus_preventing_FFQ~
+                    MESA_healthyfoodavailability+MESA_safetyfromcrime+PSS_sum+
+                    DEMO_Age+I(DEMO_Age^2)+Gender3C+RaceCategorical,
+                  preprocessed_data)
+summary(predict_ffq)
+```
+
+
+```{r}
+ggplot(preprocessed_data,aes(MESA_healthyfoodavailability,cancer_promoting_minus_preventing_FFQ))+
+  geom_smooth(method = "lm")+
+  geom_point(alpha=0.2)
+```
+
+
+```{r}
+predict_ffq_women <- lm(cancer_promoting_minus_preventing_FFQ~
+                    MESA_healthyfoodavailability+MESA_safetyfromcrime+PSS_sum+
+                    DEMO_Age+RaceCategorical,
+                  preprocessed_data %>% filter(Gender3C=="Female"))
+
+summary(predict_ffq_women)
+```
+
+> There is a rural-urban disparity in (a) eating behavior and (b) health outcomes in Oregon, after controlling for age and race but not income or SES.
+
+```{r}
+predict_ffq_rural <- lm(cancer_promoting_minus_preventing_FFQ~RuralZIP+
+                    #MESA_healthyfoodavailability+MESA_safetyfromcrime+PSS_sum+
+                    DEMO_Age+Gender+RaceCategorical,
+                  preprocessed_data)
+summary(predict_ffq_rural)
+```
+```{r}
+predict_bmi_rural <- lm(BMI~RuralZIP+
+                    #MESA_healthyfoodavailability+MESA_safetyfromcrime+PSS_sum+
+                    DEMO_Age+Gender3C+RaceCategorical,
+                  preprocessed_data)
+summary(predict_bmi_rural)
+```
+
+```{r}
+ggplot(preprocessed_data %>% filter(!is.na(RuralZIP)),aes(x=RuralZIP==TRUE,y=BMI))+geom_jitter(alpha=0.5)+geom_boxplot(fill=NA)
+```
+
+
+
+> The rural-urban disparity can be partially explained by the availability of healthy food in the community.
+
+
+```{r}
+predict_bmi_rural_2 <- lm(BMI~RuralZIP+
+                    MESA_healthyfoodavailability+
+                    DEMO_Age+Gender+RaceCategorical,
+                  preprocessed_data)
+summary(predict_bmi_rural_2)
+```
+Need to follow this up with a full mediation model.
+
+
+```{r}
+hist(preprocessed_data$MESA_healthyfoodavailability,breaks=30)
+print(sort(preprocessed_data$MESA_healthyfoodavailability))
+```
+Distribution of values suggests a bias towards always answering "strongly agree" or always answering "agree".
+
+Wonder how they correlate with the next item on the scale, which is the eating disregulation measure.
+
+```{r}
+ggplot(preprocessed_data,aes(MESA_healthyfoodavailability,EDM_mean))+geom_point(alpha=0.02)
+```
+There are a large number of responses giving either 3, 4, or 5. Wonder if there is any principled way to remove them as they look like lazy responses and noise.
+
+```{r}
+#https://www.rdocumentation.org/packages/mediation/versions/4.5.0/topics/mediate
+library(mediation)
+#first need to only get rows that are NA on all the values; need to do this prior because we have two different models and need them using the same rows.
+#strictly speaking, only need to add columns not included in both; lm package will consistently eliminate the rest.
+include_row <- rowSums(is.na(preprocessed_data[,c("BMI","MESA_healthyfoodavailability","RuralZIP")]))==0 & (preprocessed_data$Gender3C %in% c("Male","Female"))
+
+
+predict_mediator <- lm(MESA_healthyfoodavailability~RuralZIP+DEMO_Age+Gender3C+RaceCategorical2+PSS_sum,preprocessed_data[include_row,])
+predict_outcome <- lm(BMI~MESA_healthyfoodavailability+RuralZIP+DEMO_Age+Gender3C+RaceCategorical2+PSS_sum,preprocessed_data[include_row,])
+
+healthy_food_mediation <- mediate(predict_mediator,predict_outcome,boot=FALSE,sims=100,treat="RuralZIP",mediator="MESA_healthyfoodavailability")
+
+```
+
+```{r}
+summary(healthy_food_mediation)
+```
+
+The mediation effect is not quite significant. Disappointing!
+
+```{r}
+plot(healthy_food_mediation)
+```
+
+```{r}
+#https://www.rdocumentation.org/packages/mediation/versions/4.5.0/topics/mediate
+library(mediation)
+#first need to only get rows that are NA on all the values; need to do this prior because we have two different models and need them using the same rows.
+#strictly speaking, only need to add columns not included in both; lm package will consistently eliminate the rest.
+include_row <- (rowSums(is.na(preprocessed_data[,c("BMI","MESA_healthyfoodavailability","RuralZIP")]))==0) & (preprocessed_data$Gender3C %in% c("Male","Female"))
+
+preprocessed_data$MESA_healthyfoodavailability_ln <- log(preprocessed_data$MESA_healthyfoodavailability)
+preprocessed_data$MESA_healthyfoodavailability_ln_z <- (preprocessed_data$MESA_healthyfoodavailability_ln-mean(preprocessed_data$MESA_healthyfoodavailability_ln, na.rm=TRUE))/sd(preprocessed_data$MESA_healthyfoodavailability_ln,na.rm=TRUE)
+predict_mediator <- lm(MESA_healthyfoodavailability_ln_z~RuralZIP+DEMO_Age+Gender3C+RaceCategorical2+PSS_sum,preprocessed_data[include_row,])
+predict_outcome <- lm(BMI~MESA_healthyfoodavailability_ln_z+RuralZIP+DEMO_Age+Gender3C+RaceCategorical2+PSS_sum,preprocessed_data[include_row,])
+
+healthy_food_mediation <- mediate(predict_mediator,predict_outcome,boot=FALSE,sims=100,treat="RuralZIP",mediator="MESA_healthyfoodavailability_ln_z")
+
+```
+
+
+We didn't pre-register taking the log of MESA_healthyfood availability, but it is a reasonable deviation considering its non-normality.
+
+```{r}
+summary(healthy_food_mediation)
+```
+
+
+```{r}
+#https://www.rdocumentation.org/packages/mediation/versions/4.5.0/topics/mediate
+library(mediation)
+#first need to only get rows that are NA on all the values; need to do this prior because we have two different models and need them using the same rows.
+#strictly speaking, only need to add columns not included in both; lm package will consistently eliminate the rest.
+include_row <- (rowSums(is.na(preprocessed_data[,c("BMI","MESA_healthyfoodavailability","RuralZIP","aSES_02")]))==0) & (preprocessed_data$Gender3C %in% c("Male","Female"))
+
+preprocessed_data$MESA_healthyfoodavailability_ln <- log(preprocessed_data$MESA_healthyfoodavailability)
+preprocessed_data$MESA_healthyfoodavailability_ln_z <- (preprocessed_data$MESA_healthyfoodavailability_ln-mean(preprocessed_data$MESA_healthyfoodavailability_ln, na.rm=TRUE))/sd(preprocessed_data$MESA_healthyfoodavailability_ln,na.rm=TRUE)
+predict_mediator <- lm(MESA_healthyfoodavailability_ln_z~RuralZIP+DEMO_Age+Gender3C+RaceCategorical2+PSS_sum+aSES_02,preprocessed_data[include_row,])
+predict_outcome <- lm(BMI~MESA_healthyfoodavailability_ln_z+RuralZIP+DEMO_Age+Gender3C+RaceCategorical2+PSS_sum+aSES_02,preprocessed_data[include_row,])
+
+healthy_food_mediation <- mediate(predict_mediator,predict_outcome,boot=FALSE,sims=100,treat="RuralZIP",mediator="MESA_healthyfoodavailability_ln_z")
+
+```
+
+
+We didn't pre-register taking the log of MESA_healthyfood availability, but it is a reasonable deviation considering its non-normality.
+
+```{r}
+summary(healthy_food_mediation)
+```
+
+How about just in women, though?
+
+
+```{r}
+predict_bmi_rural_female <- lm(BMI~RuralZIP+
+                    #MESA_healthyfoodavailability+MESA_safetyfromcrime+PSS_sum+
+                    DEMO_Age+RaceCategorical,
+                  preprocessed_data %>% filter(Gender3C=="Female"))
+summary(predict_bmi_rural_female)
+
+predict_bmi_rural_2_female <- lm(BMI~RuralZIP+
+                    MESA_healthyfoodavailability+
+                    DEMO_Age+RaceCategorical,
+                  preprocessed_data %>% filter(Gender3C=="Female"))
+summary(predict_bmi_rural_2_female)
+```
+
+
+```{r}
+#https://www.rdocumentation.org/packages/mediation/versions/4.5.0/topics/mediate
+library(mediation)
+#first need to only get rows that are NA on all the values; need to do this prior because we have two different models and need them using the same rows.
+#strictly speaking, only need to add columns not included in both; lm package will consistently eliminate the rest.
+exclude_row <- rowSums(is.na(preprocessed_data[,c("BMI","MESA_healthyfoodavailability")]))>0
+
+preprocessed_data$MESA_healthyfoodavailability_ln <- log(preprocessed_data$MESA_healthyfoodavailability)
+predict_mediator <- lm(MESA_healthyfoodavailability~RuralZIP+DEMO_Age+RaceCategorical,(preprocessed_data[!exclude_row,] %>% filter(Gender3C=="Female")))
+predict_outcome <- lm(BMI~MESA_healthyfoodavailability+RuralZIP+DEMO_Age+RaceCategorical,(preprocessed_data[!exclude_row,] %>% filter(Gender3C=="Female")))
+
+healthy_food_mediation <- mediate(predict_mediator,predict_outcome,boot=FALSE,sims=2000,treat="RuralZIP",mediator="MESA_healthyfoodavailability")
+
+```
+
+```{r}
+summary(healthy_food_mediation)
+```
+
+
+
+hmm, we actuallly don't detect an effect of healthy food availability for women only, but this may be down to power
+
+
+
+```{r}
+#https://www.rdocumentation.org/packages/mediation/versions/4.5.0/topics/mediate
+library(mediation)
+#first need to only get rows that are NA on all the values; need to do this prior because we have two different models and need them using the same rows.
+#strictly speaking, only need to add columns not included in both; lm package will consistently eliminate the rest.
+exclude_row <- rowSums(is.na(preprocessed_data[,c("BMI","MESA_healthyfoodavailability")]))>0
+
+preprocessed_data$MESA_healthyfoodavailability_ln <- log(preprocessed_data$MESA_healthyfoodavailability)
+predict_mediator <- lm(MESA_healthyfoodavailability~RuralZIP+DEMO_Age+RaceCategorical,(preprocessed_data[!exclude_row,] %>% filter(Gender3C=="Male")))
+predict_outcome <- lm(BMI~MESA_healthyfoodavailability+RuralZIP+DEMO_Age+RaceCategorical,(preprocessed_data[!exclude_row,] %>% filter(Gender3C=="Male")))
+
+healthy_food_mediation <- mediate(predict_mediator,predict_outcome,boot=FALSE,sims=2000,treat="RuralZIP",mediator="MESA_healthyfoodavailability")
+
+```
+
+```{r}
+summary(healthy_food_mediation)
+```
+
+```{r}
+predict_ffq_rural_female <- lm(cancer_promoting_minus_preventing_FFQ~RuralZIP+
+                    #MESA_healthyfoodavailability+MESA_safetyfromcrime+PSS_sum+
+                    DEMO_Age+RaceCategorical,
+                  preprocessed_data %>% filter(Gender3C=="Female"))
+summary(predict_ffq_rural_female)
+
+predict_ffq_rural_2_female <- lm(cancer_promoting_minus_preventing_FFQ~RuralZIP+
+                    MESA_healthyfoodavailability+
+                    DEMO_Age+RaceCategorical,
+                  preprocessed_data %>% filter(Gender3C=="Female"))
+summary(predict_ffq_rural_2_female)
+```
+
+
+
+
+
+> Eating behavior and health outcomes will be influenced by perceived stress (negatively), the Self Report Habit Index (negatively). Health outcomes will be influenced by the short version of the IPAQ (negatively)
+
+
+```{r}
+preprocessed_data$
+```
+
+```{r}
+predict_health_outcomes <- lm(BMI~PSS_sum+SRHI_healthy+SRHI_unhealthy+IPAQ_total_METminutes+Gender3C + IPAQ_sittinghours,
+                  preprocessed_data)
+summary(predict_health_outcomes)
+```
+
+```{r}
+predict_eating_behavior <- lm(cancer_promoting_minus_preventing_FFQ~PSS_sum+SRHI_healthy+SRHI_unhealthy+IPAQ_total_METminutes+Gender3C,
+                  preprocessed_data)
+summary(predict_eating_behavior)
+```
+
+~~Contrary to prediction, IPAQ predicts FFQ but NOT BMI. Suggests a cultural link `health-concerned' people who work out more and eat more vegetables _despite_ their lack of efficacy??? Or just social class or something.~~
+
+> To measure the rural-urban disparity, we will use a similar linear model without community information but including rurality.
+
+
+> We will then examine whether Community healthy food environment and Community safety mediate the rurality effect.
+
+
+
+```{r}
+#https://www.rdocumentation.org/packages/mediation/versions/4.5.0/topics/mediate
+library(mediation)
+#first need to only get rows that are NA on all the values; need to do this prior because we have two different models and need them using the same rows.
+#strictly speaking, only need to add columns not included in both; lm package will consistently eliminate the rest.
+exclude_row <- rowSums(is.na(preprocessed_data[,c("BMI","MESA_safetyfromcrime")]))>0
+preprocessed_data$RuralZIP<-as.numeric(preprocessed_data$RuralZIP)
+
+preprocessed_data$MESA_safetyfromcrime_ln <- log(preprocessed_data$MESA_safetyfromcrime)
+predict_mediator <- lm(MESA_safetyfromcrime_ln~RuralZIP+DEMO_Age+Gender3C+RaceCategorical,preprocessed_data[!exclude_row,])
+predict_outcome <- lm(BMI~MESA_safetyfromcrime_ln+RuralZIP+DEMO_Age+Gender3C+RaceCategorical,preprocessed_data[!exclude_row,])
+
+crime_mediation <- mediate(predict_mediator,predict_outcome,boot=FALSE,sims=2000,treat="RuralZIP",mediator="MESA_safetyfromcrime_ln")
+
+```
+
+```{r}
+summary(lm(BMI~MESA_safetyfromcrime_ln+RuralZIP*Gender3C+DEMO_Age+RaceCategorical,preprocessed_data[!exclude_row,]))
+```
+
+```{r}
+summary(crime_mediation)
+```
+Crime apparently does mediate the relationship between rurality and BMI?????
+
+
+And for women....
+
+```{r}
+
+
+predict_mediator <- lm(MESA_safetyfromcrime_ln~RuralZIP+DEMO_Age+RaceCategorical,preprocessed_data[!exclude_row,] %>% filter(Gender3C=="Female"))
+predict_outcome <- lm(BMI~MESA_safetyfromcrime_ln+RuralZIP+DEMO_Age+RaceCategorical,preprocessed_data[!exclude_row,] %>% filter(Gender3C=="Female"))
+
+crime_mediation <- mediate(predict_mediator,predict_outcome,boot=FALSE,sims=2000,treat="RuralZIP",mediator="MESA_safetyfromcrime_ln")
+
+```
+
+
+```{r}
+summary(crime_mediation)
+```
+
+
+```{r}
+hist(preprocessed_data$MESA_neighborhoodconnectedness)
+```
+
+```{r}
+ggplot(preprocessed_data,aes(x=as.factor(RuralZIP),y=FFQ_cancer_preventing))+geom_violin()+geom_jitter(alpha=0.2)
+```
+
+
+```{r}
+summary(lm(cancer_promoting_minus_preventing_FFQ~RuralZIP,preprocessed_data %>% filter(!is.na(RuralZIP) & !is.na(cancer_promoting_minus_preventing_FFQ))))
+```
+
+
+```{r}
+summary(lm(cancer_promoting_minus_preventing_FFQ~RuralZIP,preprocessed_data))
+summary(lm(cancer_promoting_minus_preventing_FFQ~RuralZIP+DEMO_Age+Gender3C+RaceCategorical,preprocessed_data))
+```
+```{r}
+summary(lm(cancer_promoting_minus_preventing_FFQ~RuralZIP+DEMO_Age+Gender3C+RaceCategorical,preprocessed_data))
+```
+
+
+
+```{r}
+summary(lm(BMI~MESA_neighborhoodconnectedness+RuralZIP+DEMO_Age+Gender3C+RaceCategorical,preprocessed_data))
+summary(lm(cancer_promoting_minus_preventing_FFQ~MESA_neighborhoodconnectedness+RuralZIP+DEMO_Age+Gender3C+RaceCategorical,preprocessed_data))
+```
+
+
+
+Interesting: connectedness is very strongly related to cancer_promoting_minus_preventing_FFQ...but it's not related to rurality.
+
+
+```{r warning=FALSE}
+#https://www.rdocumentation.org/packages/mediation/versions/4.5.0/topics/mediate
+library(mediation)
+#first need to only get rows that are NA on all the values; need to do this prior because we have two different models and need them using the same rows.
+#strictly speaking, only need to add columns not included in both; lm package will consistently eliminate the rest.
+exclude_row <- rowSums(is.na(preprocessed_data[,c("FFQ_cancer_preventing","MESA_neighborhoodconnectedness")]))>0
+preprocessed_data$RuralZIP<-as.numeric(preprocessed_data$RuralZIP)
+
+
+predict_mediator <- lm(MESA_neighborhoodconnectedness~RuralZIP+DEMO_Age+Gender3C+RaceCategorical,preprocessed_data[!exclude_row,])
+predict_outcome <- lm(FFQ_cancer_preventing~MESA_neighborhoodconnectedness+RuralZIP+DEMO_Age+Gender3C+RaceCategorical,preprocessed_data[!exclude_row,])
+
+connectedness_mediation <- mediate(predict_mediator,predict_outcome,boot=FALSE,sims=2000,treat="RuralZIP",mediator="MESA_neighborhoodconnectedness")
+
+```
+```{r}
+summary(connectedness_mediation)
+```
+
+
+> We will measure two-way correlations between eating behavior, health outcomes, PSS-4, the SRHI, and the IPAQ.
+
+```{r, fig.width=14,fig.height=14}
+ggpairs(preprocessed_data[c("cancer_preventing_FFQ","cancer_promoting_FFQ","BMI","PSS_sum","SRHI_healthy","SRHI_unhealthy","IPAQ_walkingminutes","IPAQ_moderateminutes","IPAQ_vigorousminutes","IPAQ_sittinghours")],
+        progress = FALSE
+        ,lower = list(continuous = custom_points))
+```
+
+For women in particular:
+
+
+```{r, fig.width=14,fig.height=14}
+ggpairs((preprocessed_data %>% filter(Gender3C=="Female"))[c("cancer_preventing_FFQ","cancer_promoting_FFQ","BMI","PSS_sum","SRHI_healthy","SRHI_unhealthy","IPAQ_walkingminutes","IPAQ_moderateminutes","IPAQ_vigorousminutes","IPAQ_sittinghours")],
+        progress = FALSE
+        ,lower = list(continuous = custom_points))
+```
+
+
+Not a lot of differences heres.
+### Conclusions re: pre-registered analyses.
+
+### General hypotheses on factors afecting eatint behavior and health outcomes.
+
+We hypothesized that people in safer [H1a] and more heathily provisioned [H1b] communities will have better eating behavior.
+
+Following a pre-registered analysis plan, we found that people scoring higher on MESA healthy food availability reported better eating behavior - lower amounts of cancer promoting relative to preventing foods on the FFQ (beta=0.070, p=0.001). Community safety was unrelated.
+
+We also hypothesized that people in safer [H2a] and more healthily provisioned [H2b] communities will have lower BMIs.
+
+We found that `MESA_healthyfoodavailability` was related to lower BMIs (beta=0.075, p=0.03) but community safety was unrelated.
+
+## Prediction of rural-urban dispartiy
+
+We found a rural-urban disparity in health outcomes [H3a], but not eating behavior [H3b], after controlling for age, race, and gender. Rurality predicted a higher BMI (b=2.05, se=0.61, p<0.001), but not `cancer_promoting_minus_preventing_FFQ` (p=0.46).
+
+In the model, Hispanic ethnicity predicted lower BMI than White Alone respondents (beta=-3.79, p<0.01) in our sample. No other age, race, or gender effects were found. There were insufficient numbers of Black respondents to measure any association with Black racial identification.
+
+Age seems to negatively predict healthy eating.
+
+## Explaining the rural-urban disparity.
+
+We predicted disparities could be explained by the availability of healthy food in the community (H4). We didn't test mediation effect of eating behavior because the main effect was not significant.
+
+Confirmation here was marginal; a model predicting BMI from Rurality and healthy food availability found healthy food availability marginally predicted BMI ($p<0.05$). A mediation analysis found the proportion of the effect of rurality on BMI mediated by healthy food availability was not significant--9.0% (CI=[-.7%, 28.0%], $p=0.66$).
+
+## Supplementary predictions
+
+We predicted that perceived stress (measured by the 4-item PSS) and the SRHI would negatively affect eating behavior and health outcomes.
+
+Partially confirming the hypothesis, in a linear model of BMI, healthy (p<0.001) and unhealthy (p<0.01) components of the SRHI strongly affected the health outcome, but PSS did not significantly affect the health outcome.
+
+In a linear model of unhealthy food consumption, contrary to our hypothesis, PSS  _negatively_ predicted unhealthy eating (p<0.05) suggesting that respondents reporting higher stress ate more healthily. Consistent with our hypothesis, healthy (p<0.001) and unhealthy (p<0.001) components of the SRHI strongly affected the measure of eating behavior.
+
+Overall, the link between SHRI and BMI confirms the role of SHRI in health outcomes. More examination is needed into the role of stress in healthy eating.
+
+
+
+
+
+
+We also predicted that IPAQ--a measure of exercise-- would be affected by health outcomes, though not eating behavior
+
+## Further work
+There is evidence of some lazy invalid responses on EDM and MESA--need to follow those up. Don't think any scales had attention checks...EDM has some reverse scored items though.
+
+could which people who answered "strongly agree" or "agree" on every EDM item regardless of whether htey were reverse-scored, and may justify eliminating them.
+
+Have done some basic cleaning of EDM and didn't really help. Not sure what else we could do.
+
+ - Measure every FFQ item and correlate it back against BMI
+

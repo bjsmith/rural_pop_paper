@@ -1,0 +1,525 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(foreign)
+library(stringr)
+library(dplyr)
+library(ggplot2)
+```
+
+```{r}
+
+
+#hines_2020_raw<-read.spss(hines_location, use.value.label=TRUE,to.data.frame=TRUE)
+
+hines_locations <- Sys.glob(file.path("/Users/benjaminsmith/Google Drive/oregon/data/protected_HINTS_data/","*/hints5*.sav"))
+
+raw_file_list <- vector(mode="list",length<-length(hines_locations))
+
+for (i in 1:length(raw_file_list)){
+  hines_filepath <- hines_locations[[i]]
+  filename <- basename(hines_filepath)
+  spss_rawfile <- read.spss(hines_filepath, use.value.label=TRUE,to.data.frame=TRUE)
+  spss_rawfile[["filename"]] <- filename
+  raw_file_list[[i]] <- spss_rawfile
+}
+
+```
+
+```{r}
+
+detect_key_cols <- function(spss_item){
+    print(spss_item[["filename"]][[1]])
+    print("Race_Cat2" %in% colnames(spss_item))
+    print(paste0("PR_RUCA_2010", "PR_RUCA_2010" %in% colnames(spss_item)))
+    print(paste0("RUC2013", "RUC2013" %in% colnames(spss_item)))
+    
+    print("Age" %in% colnames(spss_item))
+    print("BMI" %in% colnames(spss_item))
+}
+
+lapply(raw_file_list,detect_key_cols)
+
+```
+
+So let's just join cycle 5, because all but one of cycle 4 have rural-urban zoning data, and none have RUCA.
+
+
+
+To join these we need to do something about all these columns that are different. So let's find the intersection of columns that are in all items.
+
+```{r}
+shared_colnames <- colnames(raw_file_list[[1]])
+for (i in 2:length(raw_file_list)){
+  shared_colnames <- intersect(colnames(raw_file_list[[i]]),shared_colnames)
+}
+
+#we want a few eextra important columns of interest
+cols_to_use <- c(shared_colnames,"Fruit","Vegetables")
+
+#then trim each file back to just these shared columns.
+#we've checked it will include the ones we want.
+file_list_trimmed <- lapply(
+  raw_file_list,
+  function(cycle_5_df){
+    return(cycle_5_df[intersect(cols_to_use,colnames(cycle_5_df))])
+  }
+  
+)
+
+```
+
+
+
+```{r}
+library(data.table)
+hines_cycle5 <- rbindlist(file_list_trimmed,fill=TRUE)
+
+```
+
+Now we need to tidy up the dataset for the key columns we're interested in.
+
+metropolitan should be `r 2661+2553+4364+3387`
+```{r}
+
+
+lapply(
+  file_list_trimmed,
+  function(cycle_5_df){
+    print(table(cycle_5_df[["PR_RUCA_2010"]]))
+    #colnames(cycle_5_df)
+  }
+)
+```
+
+
+```{r}
+table(hines_cycle5$PR_RUCA_2010)
+```
+OK, so I don't think we need to tidy this up, we just need to use a bit of regex to process this into our boolean rural item.
+
+```{r}
+
+#preprocess
+hines_cycle5$Age <- as.numeric(as.character(hines_cycle5$Age))
+hines_cycle5$BMI <- as.numeric(as.character(hines_cycle5$BMI))
+
+hines_cycle5$Age_c <- hines_cycle5$Age-38 #using U.S. median age
+```
+```{r}
+hist(hines_cycle5$Age_c)
+```
+
+```{r}
+hist(hines_cycle5$BMI)
+```
+
+```{r}
+summary(hines_cycle5$SelfGender)
+```
+
+```{r}
+hines_cycle5$HINESIsRural <- grepl("Metropolitan",hines_cycle5$PR_RUCA_2010)==FALSE
+```
+
+
+Race: join groups across the sets, then re-order in order of frequency
+
+```{r}
+
+hines_cycle5$RacePreprocessed<- stringr::str_replace(hines_cycle5$Race_Cat2," only","")
+#replace small categories
+hines_cycle5$RacePreprocessed[hines_cycle5$RacePreprocessed %in% c("Guamanian or Chamorro","Native Hawaiian","Other Pacific Islander")]<-"Pacific Islander"
+
+race_pp_levels <- names(sort(table(hines_cycle5$RacePreprocessed),decreasing = TRUE))
+
+#make "white" category first, because it's the majority category
+hines_cycle5$RacePreprocessed <- factor(hines_cycle5$RacePreprocessed,race_pp_levels)
+```
+
+```{r}
+table(hines_cycle5$RacePreprocessed)
+```
+```{r}
+hines_cycle5$HHInc[hines_cycle5$HHInc=="Missing Data (Not Ascertained)"]<-NA
+hines_cycle5$HHInc[hines_cycle5$HHInc=="Missing data (Web partial - Question Never Seen)"]<-NA
+median_hh_inc<-median(as.integer(hines_cycle5$HHInc),na.rm=TRUE)
+hines_cycle5$HHInc_r <- as.integer(hines_cycle5$HHInc)-median_hh_inc
+```
+
+```{r}
+hines_cycle5$WeeklyMinutesModerateExercise_i <- as.integer(as.character(hines_cycle5$WeeklyMinutesModerateExercise))
+```
+```{r}
+table(hines_cycle5$Fruit)
+hines_cycle5$Fruit[
+  hines_cycle5$Fruit %in% c("Missing data (Not Ascertained)","Multiple responses selected in error","Missing data (Web partial - Question Never Seen)")] <- NA
+
+#some recoding now
+hines_cycle5$Fruit[hines_cycle5$Fruit=="½ cup or less"]<-"1/2 cup or less"
+hines_cycle5$Fruit[hines_cycle5$Fruit==" ½ cup to 1 cup"]<-"1/2 cup to 1 cup"
+table(hines_cycle5$Fruit)
+#now code factors into integers.
+hines_cycle5$Fruit_i <- as.integer(NA)
+hines_cycle5$Fruit_i[hines_cycle5$Fruit=="None"]<-0
+hines_cycle5$Fruit_i[hines_cycle5$Fruit=="1/2 cup or less"]<-1
+hines_cycle5$Fruit_i[hines_cycle5$Fruit=="1/2 cup to 1 cup"]<-2
+hines_cycle5$Fruit_i[hines_cycle5$Fruit=="1 to 2 cups"]<-3
+hines_cycle5$Fruit_i[hines_cycle5$Fruit=="2 to 3 cups"]<-4
+hines_cycle5$Fruit_i[hines_cycle5$Fruit=="3 to 4 cups"]<-5
+hines_cycle5$Fruit_i[hines_cycle5$Fruit=="4 or more cups"]<-6
+table(hines_cycle5$Fruit_i,hines_cycle5$Fruit)
+hines_cycle5$Fruit_z <- (hines_cycle5$Fruit_i - mean(hines_cycle5$Fruit_i,na.rm=TRUE))/sd(hines_cycle5$Fruit_i,na.rm=TRUE)
+
+hines_cycle5$Vegetables[
+  hines_cycle5$Vegetables %in% c("Missing data (Not Ascertained)","Multiple responses selected in error","Missing data (Web partial - Question Never Seen)")] <- NA
+
+hines_cycle5$Vegetables[hines_cycle5$Vegetables=="½ cup or less"]<-"1/2 cup or less"
+hines_cycle5$Vegetables[hines_cycle5$Vegetables==" ½ cup to 1 cup"]<-"1/2 cup to 1 cup"
+table(hines_cycle5$Vegetables)
+#now code factors into integers.
+hines_cycle5$Vegetables_i <- as.integer(NA)
+hines_cycle5$Vegetables_i[hines_cycle5$Vegetables=="None"]<-0
+hines_cycle5$Vegetables_i[hines_cycle5$Vegetables=="1/2 cup or less"]<-1
+hines_cycle5$Vegetables_i[hines_cycle5$Vegetables=="1/2 cup to 1 cup"]<-2
+hines_cycle5$Vegetables_i[hines_cycle5$Vegetables=="1 to 2 cups"]<-3
+hines_cycle5$Vegetables_i[hines_cycle5$Vegetables=="2 to 3 cups"]<-4
+hines_cycle5$Vegetables_i[hines_cycle5$Vegetables=="3 to 4 cups"]<-5
+hines_cycle5$Vegetables_i[hines_cycle5$Vegetables=="4 or more cups"]<-6
+table(hines_cycle5$Vegetables_i,hines_cycle5$Vegetables)
+hines_cycle5$Vegetables_z <- (hines_cycle5$Vegetables_i - mean(hines_cycle5$Vegetables_i,na.rm=TRUE))/sd(hines_cycle5$Vegetables_i,na.rm=TRUE)
+```
+
+
+## Women
+
+```{r}
+data_to_measure <- hines_cycle5 %>% 
+  filter(SelfGender=="Female")
+
+summary(lm(BMI~Age_c+I(Age_c^2)+HINESIsRural+RacePreprocessed+filename,data_to_measure))
+  
+```
+
+This is broadly consistent with my finding--rurality isn't explanatory. 
+
+
+## Men
+
+
+```{r}
+data_to_measure <- hines_cycle5 %>% 
+  filter(SelfGender=="Male")
+
+table(data_to_measure$HINESIsRural)
+
+summary(lm(BMI~Age_c+I(Age_c^2)+HINESIsRural+RacePreprocessed+filename,data_to_measure))
+summary(lm(BMI~Age_c+I(Age_c^2)+HINESIsRural+filename,data_to_measure))
+  
+```
+
+Result here is the OPPOSITE of my Oregon dataset. There, men, but not women, show a robust relationship between Rurality and BMI. Here, the relationship is weak for men, but very strong for women.
+
+
+```{r}
+hines_cycle5 %>% group_by(SelfGender) %>% summarize(mean_height_feet = mean(as.numeric(as.character(Height_Feet)),na.rm=TRUE))
+```
+```{r}
+hines_cycle5 %>% group_by(SelfGender,HINESIsRural) %>% summarize(count = n())
+```
+
+## Interaction term
+
+
+```{r}
+data_to_measure <- hines_cycle5 %>% 
+  filter(SelfGender %in% c("Male","Female"))
+
+
+```
+
+```{r}
+data_to_measure <- hines_cycle5 %>% 
+  filter(SelfGender %in% c("Male","Female"))
+
+summary(lm(BMI~Age_c+I(Age_c^2)+HINESIsRural+SelfGender+RacePreprocessed+filename,data_to_measure))
+summary(lm(BMI~Age_c+I(Age_c^2)+HINESIsRural*SelfGender+RacePreprocessed+filename,data_to_measure))
+```
+
+
+What if we restrict to just Pacific North West? do we have neought data for that?
+
+## subset close as I can get to Oregon
+
+We dont' have pacific north west. we might have a proxy if we go to the "Pacific" census division, but then exclude high-minority areas. Might leave us with few data points but let's see...
+
+```{r}
+pacific_low_minority <- hines_cycle5 %>% filter(Stratum=="Low Minority Areas" & CENSDIV == "Pacific")
+```
+
+
+```{r}
+data_to_measure <- pacific_low_minority %>% 
+  filter(SelfGender=="Male")
+
+table(data_to_measure$HINESIsRural)
+
+summary(lm(BMI~Age+I(Age^2)+HINESIsRural+RacePreprocessed+filename,data_to_measure))
+summary(lm(BMI~Age+I(Age^2)+HINESIsRural+filename,data_to_measure))
+```
+
+```{r}
+data_to_measure <- pacific_low_minority %>% 
+  filter(SelfGender=="Female")
+
+table(data_to_measure$HINESIsRural)
+
+summary(lm(BMI~Age+I(Age^2)+HINESIsRural+RacePreprocessed+filename,data_to_measure))
+summary(lm(BMI~Age+I(Age^2)+HINESIsRural+filename,data_to_measure))
+```
+
+So for Pacific, low minority areas, we still see that Rurality is irrelevant to BMI, for men, but relevant for women. That's the opposite to what we observed in our survey of Oregon specifically, where rurality was relevant to BMI for men, but irrelevant for women.
+
+We could just look at Whites specifically, which would cut out questions about race interactions...
+
+
+
+```{r}
+data_to_measure <- pacific_low_minority %>% 
+  filter(SelfGender=="Male") %>% filter(RacePreprocessed=="White")
+
+table(data_to_measure$HINESIsRural)
+
+summary(lm(BMI~Age+I(Age^2)+HINESIsRural+filename,data_to_measure))
+```
+
+```{r}
+data_to_measure <- pacific_low_minority %>% 
+  filter(SelfGender=="Female") %>% filter(RacePreprocessed=="White")
+
+table(data_to_measure$HINESIsRural)
+
+summary(lm(BMI~Age+I(Age^2)+HINESIsRural+filename,data_to_measure))
+```
+
+What about whites in low minority areas across the whole dataset?
+
+```{r}
+data_to_measure <- hines_cycle5 %>% filter(Stratum=="Low Minority Areas" & RacePreprocessed == "White") %>% filter(SelfGender=="Female")
+table(data_to_measure$HINESIsRural)
+summary(lm(BMI~Age+I(Age^2)+HINESIsRural+filename+CENSDIV,data_to_measure))
+```
+
+
+```{r}
+data_to_measure <- hines_cycle5 %>% filter(Stratum=="Low Minority Areas" & RacePreprocessed == "White") %>% filter(SelfGender=="Male")
+table(data_to_measure$HINESIsRural)
+summary(lm(BMI~Age+I(Age^2)+HINESIsRural+filename+CENSDIV,data_to_measure))
+```
+
+Remarkable! We definitely have the sample size here, but any way I slice it, rurality matters for women and not for men. It's a pretty big sampling effect.
+
+
+```{r}
+ggplot(hines_cycle5 %>% filter(Stratum=="Low Minority Areas" & RacePreprocessed == "White") %>% filter(SelfGender %in% c("Male","Female")),aes(x=HINESIsRural,y=BMI) )+geom_boxplot()+geom_jitter(alpha=0.2)+facet_wrap(~SelfGender)
+```
+
+
+
+```{r}
+hines_cycle5$height_m_recalculated <- as.numeric(as.character(hines_cycle5$Height_Feet))*0.3048+as.numeric(as.character(hines_cycle5$Height_Inches))*0.0254
+hines_cycle5$Weight_kg<-as.numeric(as.character(hines_cycle5$Weight))*0.453592
+
+hines_cycle5$BMI_recalculated <- hines_cycle5$Weight_kg/hines_cycle5$height_m_recalculated^2
+
+
+```
+
+
+```{r}
+
+ggplot(hines_cycle5,aes(BMI_recalculated,BMI,color=SelfGender))+geom_point()+coord_cartesian(xlim=c(0,80))
+
+
+```
+
+
+```{r}
+hines_cycle5 %>% filter(BMI_recalculated>(2*BMI)) %>% select(BMI,BMI_recalculated,Weight_kg,Weight,height_m_recalculated,Height_Feet,Height_Inches)
+```
+
+
+
+## Trying to further explain that rural-urban BMI gap
+
+So there's an effect of rurality on BMI for women specifically; it may not hold for men. For the population at large it's also a marginal effect!
+
+
+```{r}
+
+data_to_measure <- hines_cycle5 %>% 
+  filter(SelfGender=="Female" & !is.na(HHInc_r))
+
+model_w_income <- lm(BMI~Age_c+I(Age_c^2)+HINESIsRural+RacePreprocessed+filename+HHInc_r,data_to_measure)
+model_no_income <- lm(BMI~Age_c+I(Age_c^2)+HINESIsRural+RacePreprocessed+filename,data_to_measure)
+
+anova(model_no_income,model_w_income)
+summary(model_w_income)
+
+#
+
+```
+
+let's try a mediate approach
+```{r}
+library(mediation)
+#model is:
+data_to_measure <- hines_cycle5 %>% 
+  filter(SelfGender=="Female" & !is.na(HHInc_r) & !is.na(BMI))
+
+#Rurality -> Income -> BMI
+b <- lm(HHInc_r~Age_c+I(Age_c^2)+HINESIsRural+RacePreprocessed+filename,data_to_measure)
+c <- lm(BMI~Age_c+I(Age_c^2)+HINESIsRural+RacePreprocessed+filename+HHInc_r,data_to_measure)
+
+income_mediation <- mediate(b,c,sims=100,treat="HINESIsRural",mediator="HHInc_r")
+summary(income_mediation)
+
+```
+
+Income mediates 25% of the effect of rurality for BMI in women.
+
+
+```{r}
+
+summary(model_w_income)
+```
+
+
+
+
+What else?
+
+
+
+Education?
+
+
+```{r}
+lm(BMI~Age_c+I(Age_c^2)+HINESIsRural+RacePreprocessed+filename+HHInc_r,data_to_measure)
+```
+
+
+Exercise?
+
+
+
+
+```{r}
+summary(lm(BMI~Age_c+I(Age_c^2)+HINESIsRural+RacePreprocessed+filename+HHInc_r+WeeklyMinutesModerateExercise,data_to_measure))
+```
+
+
+
+```{r}
+library(mediation)
+#model is:
+data_to_measure <- hines_cycle5 %>% 
+  filter(SelfGender=="Female" & !is.na(HHInc_r) & !is.na(BMI) & !is.na(WeeklyMinutesModerateExercise_i))
+data_to_measure$WeeklyMinutesModerateExercise_z<-(
+  (data_to_measure$WeeklyMinutesModerateExercise_i-mean(data_to_measure$WeeklyMinutesModerateExercise_i,na.rm=TRUE))/
+    sd(data_to_measure$WeeklyMinutesModerateExercise_i,na.rm=TRUE))
+
+#Rurality -> Income -> BMI
+b <- lm(WeeklyMinutesModerateExercise_z~Age_c+I(Age_c^2)+HINESIsRural+RacePreprocessed+filename+HHInc_r,data_to_measure)
+c <- lm(BMI~Age_c+I(Age_c^2)+HINESIsRural+RacePreprocessed+filename+HHInc_r+WeeklyMinutesModerateExercise_z,data_to_measure)
+
+exercise_mediation <- mediate(b,c,sims=100,treat="HINESIsRural",mediator="WeeklyMinutesModerateExercise_z")
+summary(exercise_mediation)
+summary(c)
+
+```
+
+Exercise, while significant as an explanatory factor (standardized beta=-0.9, p<0.001) doesn't significantly mediate our rural-urban gap.
+
+What about eating? There are two eating scales in this survey--cups of vegetables eaten and cups of fruit eaten. But they're only run for a few cycles. We can still measrue those though I think?
+
+```{r}
+data_to_measure <- hines_cycle5 %>% 
+  filter(SelfGender=="Female" & !is.na(HHInc_r) & !is.na(BMI) & !is.na(Fruit_z) & !is.na(Vegetables_z))
+
+
+data_to_measure %>% group_by(HINESIsRural) %>% summarize(count=n())
+```
+
+
+```{r}
+library(mediation)
+
+#Rurality -> Income -> BMI
+mb <- lm(Fruit_z~Age_c+I(Age_c^2)+HINESIsRural+RacePreprocessed+filename+HHInc_r,data_to_measure)
+mc <- lm(BMI~Age_c+I(Age_c^2)+HINESIsRural+RacePreprocessed+filename+HHInc_r+Fruit_z,data_to_measure)
+
+fruit_mediation <- mediate(mb,mc,sims=100,treat="HINESIsRural",mediator="Fruit_z")
+summary(fruit_mediation)
+summary(mc)
+
+```
+Again, like exercise, eating fruit is significantly related to BMI (B=-0.56,p<0.001) but doesn't significantly mediate the rural-urban effect.
+
+
+
+```{r}
+library(mediation)
+
+#Rurality -> Income -> BMI
+mb <- lm(Vegetables_z~Age_c+I(Age_c^2)+HINESIsRural+RacePreprocessed+filename+HHInc_r,data_to_measure)
+mc <- lm(BMI~Age_c+I(Age_c^2)+HINESIsRural+RacePreprocessed+filename+HHInc_r+Vegetables_z,data_to_measure)
+
+vegetables_mediation <- mediate(mb,mc,sims=100,treat="HINESIsRural",mediator="Vegetables_z")
+summary(vegetables_mediation)
+summary(mc)
+
+```
+
+
+
+```{r}
+
+data_to_measure <- hines_cycle5 %>% 
+  filter(SelfGender=="Female" & !is.na(HHInc_r) & !is.na(BMI) & !is.na(CENSDIV))
+
+
+data_to_measure %>% group_by(HINESIsRural) %>% summarize(count=n())
+library(mediation)
+
+#Rurality -> Income -> BMI
+mb <- lm(CENSDIV~Age_c+I(Age_c^2)+HINESIsRural+RacePreprocessed+filename+HHInc_r,data_to_measure)
+mc <- lm(BMI~Age_c+I(Age_c^2)+HINESIsRural+RacePreprocessed+filename+HHInc_r+CENSDIV,data_to_measure)
+
+CENSDIV_mediation <- mediate(mb,mc,sims=100,treat="HINESIsRural",mediator="CENSDIV")
+# summary(CENSDIV_mediation)
+# summary(mb)
+# summary(mc)
+
+```
+
+
+
+
+## General Food consumption/BMI relationship
+
+
+```{r}
+data_to_measure <- hines_cycle5
+
+data_to_measure$Fruit_and_vege_z <-data_to_measure$Vegetables_z+data_to_measure$Fruit_z
+summary(lm(BMI~Age_c+SelfGender+RacePreprocessed+Fruit_and_vege_z,data_to_measure))
+summary(lm(BMI~Age_c+I(Age_c^2)+SelfGender+RacePreprocessed+filename+Fruit_and_vege_z,data_to_measure))
+summary(lm(BMI~Age_c+I(Age_c^2)+SelfGender+RacePreprocessed+filename+Fruit_and_vege_z+I(Fruit_and_vege_z^2),data_to_measure))
+
+
+```
+

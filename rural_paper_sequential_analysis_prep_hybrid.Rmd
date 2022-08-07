@@ -1,0 +1,532 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r message=FALSE, warning=FALSE}
+library(dplyr)
+library(lavaan)
+source("HINTS_preprocessing.R")
+hints5 <-get_hints5()
+boot_times<-100
+
+zscore <- function(x){
+    return((x-mean(x,na.rm=TRUE))/sd(x,na.rm=TRUE))
+}
+```
+
+```{r}
+table(hints5$GeneralHealth_of) %>% cumsum / sum(!is.na(hints5$GeneralHealth_of))
+
+hist(as.integer(hints5$GeneralHealth_of))
+```
+
+
+```{r}
+library(magrittr)
+library(dplyr)
+
+
+
+data_dir <- "/Users/benjaminsmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/"
+
+preprocessed_data_filepath <- paste0(data_dir,"cloudresearch_survey_results/orfcs_preprocessed2_anon_by_subj.csv")
+library(readr)
+library(ggplot2)
+library(GGally)
+orfcs_dataset <- readr::read_csv(preprocessed_data_filepath)
+
+
+
+```
+
+
+Let's do our best to include all the same covariates we previously included.
+
+# HINTS dataset: two mediators
+
+This follows Hayes PROCESS Model 6 with two mediators but we are doing it here in Lavaan.
+
+Variables are:
+
+ - Treatment: Rurality
+ - Two Mediators: household income, and fruit and vegetable consumption, in that order.
+ - Outcome: Physical and health measures. Altogether, we'll repeat the mediation several times, with the following outcomes variables: BMI, self-rated health, aggregated cardiometabolic health, and high blood pressure. (and cancer??)
+
+
+This model below is adapted from https://towardsdatascience.com/doing-and-reporting-a-serial-mediation-model-with-two-mediators-in-r-with-lavaan-739ed3155814
+
+I think they've left some things out. I need to do a bit more research to work out how to properly implement this, probably including a basic crash course in SEM.
+
+```{r}
+library(stringi)
+# [1] "Fruit_vegetables_z~HINTSIsRural_i+Age_c+I(Age_c^2)+RacePP+Gender3C+filename"
+# [1] "MedConditions_HighBP_i~Fruit_vegetables_z+HINTSIsRural_i+Age_c+I(Age_c^2)+RacePP+Gender3C+filename"
+# IncomeRanges_r
+
+#need to do prepare variables so lavaan can process them
+hints5_pp <- hints5
+#add quadratic
+hints5_pp$Age_c_pow2 <- hints5_pp$Age_c^2
+
+
+#one-hot some variables
+factor_to_clean_string <- function(data, col_to_stringify){
+  data[[col_to_stringify]] <- as.character(data[[col_to_stringify]])
+  data[[col_to_stringify]] <- (
+    str_replace_all(data[[col_to_stringify]],"\\s","_") %>% 
+      str_replace_all("\\W","")
+  )#table(hints5_pp[[col_to_stringify]])
+  return(data)
+}
+
+hints5_pp<-factor_to_clean_string(hints5_pp,"RacePP2")
+hints5_pp$RacePP2<-factor(hints5_pp$RacePP2)
+hints5_pp <- mltools::one_hot(hints5_pp,"RacePP2",dropCols = FALSE)
+print(paste0(colnames(hints5_pp)[grepl("RacePP2_",colnames(hints5_pp))],collapse=" + "))
+
+hints5_pp<-factor_to_clean_string(hints5_pp,"Gender3C")
+hints5_pp$Gender3C<-factor(hints5_pp$Gender3C)
+hints5_pp <- mltools::one_hot(hints5_pp,"Gender3C",dropCols = FALSE)
+print(paste0(colnames(hints5_pp)[grepl("Gender3C_",colnames(hints5_pp))],collapse=" + "))
+```
+Now prepare the ORFCS dataset for lavaan.
+
+```{r}
+orfcs_dataset$BMI_z <- zscore(orfcs_dataset$BMI)
+orfcs_dataset$DEMO_Age_z <- zscore(orfcs_dataset$DEMO_Age)
+
+#need to do prepare variables so lavaan can process them
+orfcs_dataset_pp <- data.table(orfcs_dataset)
+#add quadratic
+orfcs_dataset_pp$DEMO_Age_pow2_z <- zscore(orfcs_dataset_pp$DEMO_Age^2)
+
+
+#one-hot some variables
+
+
+
+orfcs_dataset_pp<-factor_to_clean_string(orfcs_dataset_pp,"RaceC2")
+orfcs_dataset_pp$RaceC2<-factor(orfcs_dataset_pp$RaceC2)
+orfcs_dataset_pp <- mltools::one_hot(orfcs_dataset_pp,"RaceC2",dropCols = FALSE)
+print(paste0(colnames(orfcs_dataset_pp)[grepl("RaceC2_",colnames(orfcs_dataset_pp))],collapse=" + "))
+
+orfcs_dataset_pp<-factor_to_clean_string(orfcs_dataset_pp,"Gender3C")
+orfcs_dataset_pp$Gender3C<-factor(orfcs_dataset_pp$Gender3C)
+orfcs_dataset_pp <- mltools::one_hot(orfcs_dataset_pp,"Gender3C",dropCols = FALSE)
+print(paste0(colnames(orfcs_dataset_pp)[grepl("Gender3C_",colnames(orfcs_dataset_pp))],collapse=" + "))
+```
+
+
+```{r}
+
+#TREAT=HINTSIsRural_i
+#m1=IncomeRanges_r
+#m2=Fruit_vegetables_z
+#OUTCOME=MedConditions_HighBP_i
+
+
+#NEXT TO DO: DEAL WITH CATEGORICAL DATA. GUIDE HERE: https://lavaan.ugent.be/tutorial/cat.html
+hints_model_template=
+"
+  #Regressions
+  IncomeRanges_r ~ ab*HINTSIsRural_i + Age_c + Age_c_pow2 + Gender3C_Male + Gender3C_MissingOrMultiple + RacePP2_American_Indian_or_Alaska_Native + RacePP2_Asian_Indian + RacePP2_Black + RacePP2_Chinese + RacePP2_Filipino + RacePP2_Japanese + RacePP2_Korean + RacePP2_Missing_Data + RacePP2_Multiple_races_selected + RacePP2_Other_Asian + RacePP2_Pacific_Islander + RacePP2_Vietnamese
+  
+  Fruit_vegetables_z ~ bc*IncomeRanges_r + ac*HINTSIsRural_i + Age_c + Age_c_pow2 + Gender3C_Male + Gender3C_MissingOrMultiple + RacePP2_American_Indian_or_Alaska_Native + RacePP2_Asian_Indian + RacePP2_Black + RacePP2_Chinese + RacePP2_Filipino + RacePP2_Japanese + RacePP2_Korean + RacePP2_Missing_Data + RacePP2_Multiple_races_selected + RacePP2_Other_Asian + RacePP2_Pacific_Islander + RacePP2_Vietnamese
+  
+  (OUTCOMEVAR) ~ cd*Fruit_vegetables_z + bd*IncomeRanges_r + ad*HINTSIsRural_i + Age_c + Age_c_pow2 + Gender3C_Male + Gender3C_MissingOrMultiple + RacePP2_American_Indian_or_Alaska_Native + RacePP2_Asian_Indian + RacePP2_Black + RacePP2_Chinese + RacePP2_Filipino + RacePP2_Japanese + RacePP2_Korean + RacePP2_Missing_Data + RacePP2_Multiple_races_selected + RacePP2_Other_Asian + RacePP2_Pacific_Islander + RacePP2_Vietnamese
+  
+  
+  #Defined Parameters:
+  indirect_effect := ab*bc*cd
+  effect_via_inc_only :=ab*bd
+  effect_via_fruit_vege_only :=ac*cd
+  direct_effect := ad
+"
+
+# - Outcome: Physical and health measures. Altogether, we'll repeat the mediation several times, with the following outcomes variables: BMI, self-rated health, aggregated cardiometabolic health, and high blood pressure.
+
+outcome_measures <- c(
+  "BMI",
+  "GeneralHealth_i",
+  "MedConditionsAggregate",
+  "MedConditions_HighBP_i",
+  "EverHadCancer_i"#no cancer for now, doesn't seem very important.
+  )
+
+
+
+
+```
+
+
+```{r}
+hints_fits_by_outcome<- list()
+
+for (outcome_var in outcome_measures){
+  set.seed(05711846)
+  hints_model_w_outcome <- str_replace_all(hints_model_template,"\\(OUTCOMEVAR\\)",outcome_var)
+  cat(paste0("MEDIATION MODEL FOR OUTCOME: ",outcome_var))
+  cat(hints_model_w_outcome)
+  fit=sem(
+    hints_model_w_outcome,
+    hints5_pp,
+    se = "bootstrap",
+    bootstrap=boot_times,
+    likelihood = "wishart")
+  
+  hints_fits_by_outcome[[outcome_var]]<-fit
+  summary(fit)
+  cat("-----\n\n\n")
+}
+
+
+```
+
+
+# Oregon dataset: three mediators
+
+For comparison with HINTS, we'll first repeat the HINTS dataset two-mediator model as described above, but using three mediators.
+
+THen, we'll proceed with our main Oregon dataset analysis.
+
+This follows Hayes PROCESS Model 6 with THREE mediators but we are doing it here in Lavaan.
+
+Variables are:
+
+ - Treatment: Rurality
+ - Two Mediators: household income, MESA healthy food availability, and fruit and vegetable consumption, in that order.
+ - Outcome: Physical and health measures. Altogether, we'll repeat the mediation several times, with the following outcomes variables: BMI, self-rated health, aggregated cardiometabolic health, and high blood pressure.
+
+
+
+```{r}
+#TREAT=HINTSIsRural_i
+#m1=IncomeRanges_r
+#m2=Fruit_vegetables_z
+#OUTCOME=MedConditions_HighBP_i
+
+
+# mb <- lm(MESA_healthyfoodavailability_z~RuralZIP_i+Gender3C+DEMO_Age_z+RaceC2+PSS_z,data_to_measure)
+# mc <- lm(BMI~RuralZIP_i+Gender3C+DEMO_Age_z+RaceC2+MESA_healthyfoodavailability_z+PSS_z,data_to_measure)
+
+# [1] "RaceC2_Asian + RaceC2_HawaiianOtherPacificIslander + RaceC2_HispanicAnyRace + RaceC2_OtherRaceRaceNotReported + RaceC2_WhiteOnly"
+# [1] "Gender3C_Female + Gender3C_Male + Gender3C_Other"
+
+#NEXT TO DO: DEAL WITH CATEGORICAL DATA. GUIDE HERE: https://lavaan.ugent.be/tutorial/cat.html
+oregon_model_template=
+"
+  #Regressions
+  aSES_02_z ~ ab*RuralZIP_i + DEMO_Age_z + DEMO_Age_pow2_z + Gender3C_Male + Gender3C_Other + RaceC2_Asian + RaceC2_HawaiianOtherPacificIslander + RaceC2_HispanicAnyRace + RaceC2_OtherRaceRaceNotReported
+  
+  MESA_healthyfoodavailability_z ~ bc*aSES_02_z + ac*RuralZIP_i + DEMO_Age_z + DEMO_Age_pow2_z + Gender3C_Male + Gender3C_Other + RaceC2_Asian + RaceC2_HawaiianOtherPacificIslander + RaceC2_HispanicAnyRace + RaceC2_OtherRaceRaceNotReported
+  
+  FFQ_fruit_vegetables_z ~ cd*MESA_healthyfoodavailability_z + bd*aSES_02_z + ad*RuralZIP_i + DEMO_Age_z + DEMO_Age_pow2_z + Gender3C_Male + Gender3C_Other + RaceC2_Asian + RaceC2_HawaiianOtherPacificIslander + RaceC2_HispanicAnyRace + RaceC2_OtherRaceRaceNotReported
+  
+  (OUTCOMEVAR) ~ de*FFQ_fruit_vegetables_z + ce*MESA_healthyfoodavailability_z + be*aSES_02_z + ae*RuralZIP_i + DEMO_Age_z + DEMO_Age_pow2_z + Gender3C_Male + Gender3C_Other + RaceC2_Asian + RaceC2_HawaiianOtherPacificIslander + RaceC2_HispanicAnyRace + RaceC2_OtherRaceRaceNotReported
+  
+  
+  #Defined Parameters:
+  indirect_effect := ab*bc*cd*de
+  d_rural_food_availability := ac
+  id_rural_food_availability := ab*bc
+  rural_inc_consump := ab*bd*de
+  direct_effect := ae
+"
+
+oregon_model_template_simplified=
+"
+  #Regressions
+  aSES_02_z ~ ab*RuralZIP_i# + DEMO_Age_z + DEMO_Age_pow2_z + Gender3C_Male + RaceC2_Asian + RaceC2_HispanicAnyRace + RaceC2_OtherRaceRaceNotReported
+  
+  MESA_healthyfoodavailability_z ~ bc*aSES_02_z + ac*RuralZIP_i# + DEMO_Age_z + DEMO_Age_pow2_z + Gender3C_Male + RaceC2_Asian + RaceC2_HispanicAnyRace + RaceC2_OtherRaceRaceNotReported
+  
+  FFQ_fruit_vegetables_z ~ cd*MESA_healthyfoodavailability_z + bd*aSES_02_z + ad*RuralZIP_i# + DEMO_Age_z + DEMO_Age_pow2_z +  + Gender3C_Male + RaceC2_Asian + RaceC2_HispanicAnyRace + RaceC2_OtherRaceRaceNotReported
+  
+  (OUTCOMEVAR) ~ de*FFQ_fruit_vegetables_z + ce*MESA_healthyfoodavailability_z + be*aSES_02_z + ae*RuralZIP_i# + DEMO_Age_z + DEMO_Age_pow2_z + Gender3C_Male + RaceC2_Asian + RaceC2_HispanicAnyRace + RaceC2_OtherRaceRaceNotReported
+  
+  
+  #Defined Parameters:
+  indirect_effect := ab*bc*cd*de
+  d_rural_food_availability := ac
+  id_rural_food_availability := ab*bc
+  rural_inc_consump := ab*bd*de
+  direct_effect := ae
+"
+
+# - Outcome: Physical and health measures. Altogether, we'll repeat the mediation several times, with the following outcomes variables: BMI, self-rated health, aggregated cardiometabolic health, and high blood pressure.
+
+outcome_measures <- c(
+  "BMI_z"#,
+  #"GeneralHealth_i",
+  #"MedConditionsAggregate",
+  #"MedConditions_HighBP_i",
+  #"EverHadCancer_i"#no cancer for now, doesn't seem very important.
+  )
+
+
+
+
+```
+ 
+ 
+
+```{r}
+table(orfcs_dataset_pp$Gender3C)
+table(is.na(orfcs_dataset_pp$Gender3C))
+```
+
+
+```{r}
+
+orfcs_simplified <-orfcs_dataset_pp %>% filter(Gender3C %in% c("Male","Female"))
+
+set.seed(8233042)
+oregon_model_w_outcome <- str_replace_all(oregon_model_template,"\\(OUTCOMEVAR\\)","BMI")
+#cat(paste0("MEDIATION MODEL FOR OUTCOME: ",outcome_var))
+#cat(oregon_model_w_outcome)
+orfcs_fit=sem(
+  oregon_model_w_outcome,
+  orfcs_dataset_pp,
+  #estimator = "PML",
+  se = "bootstrap",
+  bootstrap=boot_times,
+  likelihood = "wishart"
+  )
+
+summary(orfcs_fit)
+
+
+```
+
+
+ 
+# Hybrid: three mediators
+
+This follows Hayes PROCESS Model 6 with THREE mediators. We need to somehow manually combine the two datasets by multiplying effects. Need to follow bootstrap analysis, which means we need to extract raw bootstrap results and combine them. I'm not sure it's feasible, but it would be quite valuable to do.
+
+Variables are:
+
+ - Treatment: Rurality
+ - Two Mediators: household income, MESA healthy food availability, and fruit and vegetable consumption, in that order.
+ - Outcome: Physical and health measures. Altogether, we'll repeat the mediation several times, with the following outcomes variables: BMI, self-rated health, aggregated cardiometabolic health, and high blood pressure.
+ 
+ 
+## where are the variables we need?
+Is there a way to run the bootstrap and then extract the results over the bootstrap??
+
+
+
+
+```{r}
+dim(fit@boot$coef)
+```
+
+
+```{r}
+fit_summary<-summary(fit)
+```
+
+So how do these all correspond to the mere 57 items we found in the bootstrap?
+
+nope. how about just looking at the summary object?
+
+```{r}
+fit_summary$PE[1:57,1:4]
+```
+
+OK great. So we use this latter table to tell us which items from the bootstrap to use. Then we can query the coef table in the bootstrap, which has `boot_times` measures for every item.
+
+Then we can run estimations for each item in the model SEPARATELY for HINTS and ORFCS, then manually combine them. Should replicate the within-sample analysis with my code before implementing.
+
+```{r}
+dim(fit@boot$coef)
+```
+
+
+## HINTS BMI dataset data extraction
+
+Let's get the HINTs data. We need two pieces of information: the *labels* to tell us which coefficients, then the coefficients themselves.
+
+```{r}
+HINTS_BMI <- hints_fits_by_outcome[["BMI"]]
+
+HINTS_BMI_PE<-summary(HINTS_BMI)$PE
+
+```
+```{r}
+print(nrow(HINTS_BMI_PE))
+HINTS_BMI_PE$index<-1:nrow(HINTS_BMI_PE)
+labelled_coefficients <- HINTS_BMI_PE %>% filter(label!="")
+
+row_ids_to_fetch <- labelled_coefficients$index[1:6]
+```
+```{r}
+HINTS_BMI_coef<-HINTS_BMI@boot$coef
+
+dim(HINTS_BMI_coef)
+
+bootstrap_results<-HINTS_BMI_coef[,row_ids_to_fetch]
+```
+
+
+```{r}
+labelled_coefficients
+```
+
+```{r}
+print(apply(bootstrap_results,2,mean))
+print(apply(bootstrap_results,2,median))
+print(apply(bootstrap_results,2,sd))
+```
+
+These aren't exactly the same as the estimates lavaan prints out, and I'm not sure why, but let's run with it...
+
+Now we want to reproduce the "indirect effect".
+
+```{r}
+colnames(bootstrap_results)<-labelled_coefficients$label[1:6]
+
+hints_indirect_effect <- bootstrap_results[,"ab"]*bootstrap_results[,"bc"]*bootstrap_results[,"cd"]
+```
+
+```{r}
+print(paste(mean(hints_indirect_effect),sd(hints_indirect_effect)))
+print(labelled_coefficients %>% filter(label=="indirect_effect"))
+```
+
+Great! So now we just need to use the same method to extract the data from the ORFCS study.
+
+## BMI Indirect Effect
+
+```{r}
+extract_and_label_bootstrap_results<-function(fit_obj,rows){
+  fit_to_read <- fit_obj
+  #sink("temp_diversion.txt")
+  fit_pe<-summary(fit_to_read)$PE
+  #sink(NULL)
+  # print(summary(fit_to_read))
+  
+  print(nrow(fit_pe))
+  fit_pe$index<-1:nrow(fit_pe)
+  labelled_coefficients <- fit_pe %>% filter(label!="")
+  
+  row_ids_to_fetch <- labelled_coefficients$index[1:rows]
+  
+  fit_to_read_coef<-fit_to_read@boot$coef
+  
+  print(dim(fit_to_read_coef))
+  
+  bootstrap_results<-fit_to_read_coef[,row_ids_to_fetch]
+  
+  colnames(bootstrap_results)<-labelled_coefficients$label[1:rows]
+  return(bootstrap_results)
+}
+orfcs_boot<-extract_and_label_bootstrap_results(orfcs_fit,10)
+hints_boot <-extract_and_label_bootstrap_results(hints_fits_by_outcome[["BMI"]],6)
+```
+
+
+Great, so now we grab the "bc" and "cd" values from orfcs...
+
+```{r}
+colnames(orfcs_boot)<-
+  paste0("orfcs_",colnames(orfcs_boot))
+
+colnames(hints_boot)<-
+  paste0("hints_",colnames(hints_boot))
+```
+
+```{r}
+combined_boot_results <- data.frame(cbind(orfcs_boot,hints_boot[1:99,]))
+
+hybrid_indirect_effect <- combined_boot_results$hints_ab*combined_boot_results$orfcs_bc*combined_boot_results$orfcs_cd*combined_boot_results$hints_cd
+```
+
+
+```{r}
+print(paste("Estimate=",mean(hybrid_indirect_effect),", Std. Err=",sd(hybrid_indirect_effect)))
+t.test(hybrid_indirect_effect)
+```
+
+On its face, this "hybrid effect" shows that if we assume relationships between (a) household income and health food availability and (b) health food availability and fruit and veggie consumption are the same in the HINTS population as they are in the ORFCS population, then rurality has an indirect effect through health food availability in HINTS, too.
+
+Can we show this for the other hints variables?
+
+## Other Indirect Effects
+
+If we make the _additional assumption_ that health food availability has the same mediation effect for health as it does for BMI, then what do we get?
+
+```{r}
+get_two_tailed_score <- function(z_score){
+  return((1-pnorm(abs(z_score)))*2)
+}
+
+summarize_calculated_effect <- function(effect_vector){
+    effect_mean <- mean(effect_vector)
+    effect_se <- sd(effect_vector)
+    #the z-value here is exactly what lavaan displays.
+    #it's going to be a bit different
+    #because the mean and se I get are both a bit different for reasons that are unclear to me.
+    effect_z_value <- effect_mean/effect_se
+    effect_p_value <- get_two_tailed_score(effect_z_value)
+    
+    cat(paste("Estimate=",signif(effect_mean,4),", Std. Err=",signif(effect_se,4),", z-value=",signif(effect_z_value,4), ", p-value=",signif(effect_p_value,4)))
+    cat("\n")
+    #print(t.test(hybrid_indirect_effect))
+    #cat("\n")
+  }
+
+orfcs_boot<-extract_and_label_bootstrap_results(orfcs_fit,10)
+colnames(orfcs_boot)<-
+  paste0("orfcs_",colnames(orfcs_boot))
+for (effect_name in names(hints_fits_by_outcome)){
+  cat(paste0("HYBRID INDIRECT EFFECT FOR: ",effect_name,"\n\n"))
+  hints_boot <-extract_and_label_bootstrap_results(hints_fits_by_outcome[[effect_name]],6)
+  # sink("temp_diversion.txt")
+  # lavaan_computed_indirect_effect <- (
+  #   summary(hints_fits_by_outcome[[effect_name]])$PE %>% filter(label=="indirect_effect")
+  # )
+  # sink(NULL)
+  colnames(hints_boot)<-
+    paste0("hints_",colnames(hints_boot))
+  
+  
+  row_count <- min(nrow(orfcs_boot),nrow(hints_boot))
+  combined_boot_results <- data.frame(cbind(orfcs_boot[1:row_count,],hints_boot[1:row_count,]))
+  
+
+  
+  # cat("HINTS lavaan pre-computed indirect effect:\n")
+  # cat(paste(names(lavaan_computed_indirect_effect),collapse="\t"))
+  # cat(paste(lavaan_computed_indirect_effect,collapse="\t"))
+  # 
+  # cat("\n")
+
+  cat("HINTS indirect effect:\n ")  
+  HINTS_indirect_effect <- apply(combined_boot_results %>% select(hints_ab, hints_bc, hints_cd),1,prod)
+  summarize_calculated_effect(HINTS_indirect_effect)
+  
+  cat("Hybrid indirect effect:\n ")
+  hybrid_indirect_effect <- apply(combined_boot_results %>% select(hints_ab, orfcs_bc,orfcs_cd, hints_cd),1,prod)
+    
+  summarize_calculated_effect(hybrid_indirect_effect)
+  
+  cat("---------\n\n\n")
+
+}
+
+
+```
+OK, great. I'm not sure I believe these t-tests reflect the variance. They are a test across the variance represented in the bootstrap, but not sure that really suffices. Maybe that's just within-sample variance? We need to use the se that we estimated to generate the zscore. It should work out at least for the general health hybrid measure.
+
+
+We need t-values, which means we need to use the appropriate number of degrees of freedom to calculate 
+
+```{r}
+pt(-0.00028/0.00027,0.5)
+```
+
+

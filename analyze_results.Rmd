@@ -1,0 +1,504 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r}
+
+library(magrittr)
+library(dplyr)
+
+```
+
+
+```{r}
+data_dir <- "/Users/benjaminsmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/"
+
+preprocessed_data_filepath <- paste0(data_dir,"cloudresearch_survey_results/orfcs_preprocessed_anon_by_subj.csv")
+library(readr)
+library(ggplot2)
+library(GGally)
+preprocessed_data_raw <- readr::read_csv(preprocessed_data_filepath)
+
+
+```
+
+
+
+```{r}
+rows_to_remove <- ((preprocessed_data_raw$EDM_forwardscore<2 & preprocessed_data_raw$EDM_reversescored>4) |
+  (preprocessed_data_raw$EDM_forwardscore>=4.5 & preprocessed_data_raw$EDM_reversescored<2))
+rows_to_remove[is.na(rows_to_remove)]<-FALSE
+sum(rows_to_remove)
+sub_ids_to_remove <- preprocessed_data_raw[rows_to_remove,"SID"]
+preprocessed_data <- preprocessed_data_raw %>% filter((SID %in% unlist(sub_ids_to_remove))==FALSE)
+
+preprocessed_data[!is.na(preprocessed_data$WEIGHT) & preprocessed_data$WEIGHT>500,c("WEIGHT","WEIGHT_kg","BMI")] <- NA
+
+
+
+preprocessed_data$RaceCategorical<-factor(preprocessed_data$RaceCategorical,levels=unique(preprocessed_data$RaceCategorical))
+```
+
+
+What more do we want to do?
+
+ - think we've done the main checks on gender. 
+ - Measure only BMI=25+ population in order to get something more comparable with DEV study results. Probably copy initial pre-reg and run for filter with BMI=25+. This might be helpful for gender.
+ - Check: does food consumption mediate the relationship between rural status and higher BMI?
+ - Run full model from spreadsheet, trying to maximally explain food consumption and BMI. Ideally, include FCI to predict FFQ, but hopefully be able to include environment as well
+ - Contact Nick's lab about analyzing our detailed location data to get nearby shops
+ - Run a small analysis on foods consumed to identify relationship between different food consumption patterns and BMI. But this hsould probably be done on DEV dataset.
+
+
+```{r}
+print(summary(lm(BMI~cancer_promoting_minus_preventing_FFQ  ,preprocessed_data)))
+
+print(summary(lm(BMI~cancer_promoting_minus_preventing_FFQ+Gender3C +PSS_sum+
+                    DEMO_Age+RaceCategorical ,preprocessed_data)))
+
+print(summary(lm(BMI~cancer_promoting_minus_preventing_FFQ*Gender3C +PSS_sum+
+                    DEMO_Age+RaceCategorical ,preprocessed_data)))
+```
+## Check: does food consumption mediate the relationship between rural status and higher BMI?
+
+We'll focus on women since the relationship among women between FFQ and BMI in this sample is more straightforward.
+
+```{r}
+
+#https://www.rdocumentation.org/packages/mediation/versions/4.5.0/topics/mediate
+library(mediation)
+
+preprocessed_data_women <- preprocessed_data %>% filter(Gender3C=="Female")
+#first need to only get rows that are NA on all the values; need to do this prior because we have two different models and need them using the same rows.
+#strictly speaking, only need to add columns not included in both; lm package will consistently eliminate the rest.
+exclude_row <- rowSums(is.na(preprocessed_data_women[,c("BMI","MESA_healthyfoodavailability")]))>0
+
+#preprocessed_data_women$cancer_promoting_minus_preventing_FFQ <- log(preprocessed_data_women$cancer_promoting_minus_preventing_FFQ)
+predict_mediator <- lm(cancer_promoting_minus_preventing_FFQ~RuralZIP+DEMO_Age+RaceCategorical,preprocessed_data_women[!exclude_row,])
+predict_outcome <- lm(BMI~cancer_promoting_minus_preventing_FFQ+RuralZIP+DEMO_Age+RaceCategorical,preprocessed_data_women[!exclude_row,])
+
+healthy_food_mediation <- mediate(predict_mediator,predict_outcome,boot=FALSE,sims=2000,treat="RuralZIP",mediator="cancer_promoting_minus_preventing_FFQ")
+```
+
+```{r}
+summary(healthy_food_mediation)
+
+```
+
+
+
+```{r}
+
+#https://www.rdocumentation.org/packages/mediation/versions/4.5.0/topics/mediate
+library(mediation)
+
+#preprocessed_data_women <- preprocessed_data %>% filter(Gender3C=="Female")
+#first need to only get rows that are NA on all the values; need to do this prior because we have two different models and need them using the same rows.
+#strictly speaking, only need to add columns not included in both; lm package will consistently eliminate the rest.
+exclude_row <- rowSums(is.na(preprocessed_data[,c("BMI","MESA_healthyfoodavailability")]))>0
+
+#preprocessed_data$cancer_promoting_minus_preventing_FFQ <- log(preprocessed_data$cancer_promoting_minus_preventing_FFQ)
+predict_mediator <- lm(cancer_promoting_minus_preventing_FFQ~RuralZIP+DEMO_Age+RaceCategorical,preprocessed_data[!exclude_row,])
+predict_outcome <- lm(BMI~cancer_promoting_minus_preventing_FFQ+RuralZIP+DEMO_Age+RaceCategorical,preprocessed_data[!exclude_row,])
+
+healthy_food_mediation <- mediate(predict_mediator,predict_outcome,boot=FALSE,sims=2000,treat="RuralZIP",mediator="cancer_promoting_minus_preventing_FFQ")
+
+summary(healthy_food_mediation)
+```
+
+## Full analysis from spreadsheet
+
+So here, we're not looking at rural subjects in particular; we want to know about all subjects in general. How well can we explain FFQ and BMI from the attitude and lifestyle and environmental data?
+
+https://docs.google.com/spreadsheets/d/1K1Ub8XsANENQo61p5b5UX2nG1RfJQiN4vqFewMaIWbA/edit?ouid=108542841632156028788&usp=sheets_home&ths=true
+
+Our model is that there are three components contibuting to calorie intake:
+ - environment (community and personal)
+ - learned association between hunger nad unhealthy food (FCI-Crave)
+ - Non-habitual preference for healthy food (FCI-like)
+ 
+These influence FFQ.
+
+FFQ in turn influences BMI, along with other factors like IPAQ.
+
+So how well does this work out?
+
+First let's test each of these alone.
+
+
+#### Component 1: environment
+
+```{r}
+preprocessed_data$MESA_healthyfoodavailability_ln <- log(preprocessed_data$MESA_healthyfoodavailability)
+```
+
+```{r}
+
+print(summary(lm(cancer_promoting_minus_preventing_FFQ~MESA_healthyfoodavailability+Gender3C +PSS_sum+DEMO_Age+RaceCategorical,preprocessed_data)))
+print(summary(lm(cancer_promoting_minus_preventing_FFQ~MESA_healthyfoodavailability+MESA_safetyfromcrime+Gender3C +PSS_sum+DEMO_Age+RaceCategorical,preprocessed_data)))
+print(summary(lm(cancer_promoting_minus_preventing_FFQ~MESA_healthyfoodavailability+MESA_neighborhoodconnectedness+MESA_safetyfromcrime+Gender3C +PSS_sum+DEMO_Age+RaceCategorical,preprocessed_data)))
+```
+
+
+So, healthy food availability is important, but the other community variables collected are marginal at best, and we'll leave them out.
+
+#### Component 2: Craving/learned association
+
+
+What about the next component: learned association betweeen hunger and food? Taking a lot of liberties, we approximate this as FCI-Crave
+
+```{r}
+print(summary(lm(cancer_promoting_minus_preventing_FFQ~FCI_cancer_promoting+FCI_craved_cancer_preventing+MESA_healthyfoodavailability+Gender3C +PSS_sum+DEMO_Age+RaceCategorical,preprocessed_data)))
+```
+
+Really interesting that age and PSS become significant AFTER adding these into the model! This is a good sign. I wonder if we should try looking at promote and prevent separately.
+
+
+
+```{r}
+print(summary(lm(cancer_promoting_FFQ~FCI_cancer_promoting+FCI_craved_cancer_preventing+MESA_healthyfoodavailability+Gender3C +PSS_sum+DEMO_Age+RaceCategorical,preprocessed_data)))
+
+print(summary(lm(cancer_preventing_FFQ~FCI_cancer_promoting+FCI_craved_cancer_preventing+MESA_healthyfoodavailability+Gender3C +PSS_sum+DEMO_Age+RaceCategorical,preprocessed_data)))
+
+```
+
+Model really works bets on the prevention side. And with a gender split...
+
+
+```{r}
+
+print(summary(lm(cancer_promoting_minus_preventing_FFQ~FCI_cancer_promoting+FCI_craved_cancer_preventing+MESA_healthyfoodavailability +PSS_sum+DEMO_Age+RaceCategorical,preprocessed_data %>% filter(Gender3C=="Female"))))
+
+print(summary(lm(cancer_promoting_FFQ~FCI_cancer_promoting+FCI_craved_cancer_preventing+MESA_healthyfoodavailability +PSS_sum+DEMO_Age+RaceCategorical,preprocessed_data %>% filter(Gender3C=="Female"))))
+
+print(summary(lm(cancer_preventing_FFQ~FCI_cancer_promoting+FCI_craved_cancer_preventing+MESA_healthyfoodavailability +PSS_sum+DEMO_Age+RaceCategorical,preprocessed_data %>% filter(Gender3C=="Female"))))
+
+```
+
+Model still works best on the prevention side; but it doesn't improve over using the general model. So we'll stick with that.
+
+
+#### Component 3: non-habit food preference
+
+
+
+```{r}
+print(summary(lm(cancer_promoting_minus_preventing_FFQ~FCI_cancer_promoting+FCI_craved_cancer_preventing+FCI_liked_cancer_preventing+FCI_liked_cancer_promoting+ MESA_healthyfoodavailability +PSS_sum+Gender3C+DEMO_Age+RaceCategorical,preprocessed_data)))
+
+
+print(summary(lm(cancer_promoting_minus_preventing_FFQ~FCI_cancer_promoting+FCI_craved_cancer_preventing+FCI_liked_cancer_preventing+FCI_liked_cancer_promoting+ MESA_healthyfoodavailability +PSS_sum+DEMO_Age+RaceCategorical,preprocessed_data %>% filter(Gender3C=="Female"))))
+
+```
+Interesting! 
+ - PSS no longer significant; seems to be explained by liked-cancer-preventing
+ - FCI liked cancer promoting is insignificant generally
+ - age no longer relevant once we include food preference in the model.
+ - Compared to the first model where we included neither craving nor liking, Race has gone from relevant to not relevant at all.
+ 
+ Overall we explain 36% of the variance among women, and 34% of variance in the all-gender model. This is not bad, really. Can we explain additional variance with any of the data we have?
+
+
+IPAQ is not quite significant, but significant enoguh to include. But I'm not sure how to interpret this, considering we're still predicting food consumption.
+
+
+
+```{r}
+
+#preprocessed_data$household_income_per_person <- preprocessed_data$aSES_02/
+
+print(summary(lm(cancer_promoting_minus_preventing_FFQ~FCI_cancer_promoting+FCI_craved_cancer_preventing+FCI_liked_cancer_preventing+FCI_liked_cancer_promoting+ MESA_healthyfoodavailability +PSS_sum+Gender3C+DEMO_Age+RaceCategorical+
+                   aSES_01+aSES_02
+                   ,preprocessed_data)))
+
+
+print(summary(lm(cancer_promoting_minus_preventing_FFQ~FCI_cancer_promoting+FCI_craved_cancer_preventing+FCI_liked_cancer_preventing+FCI_liked_cancer_promoting+ MESA_healthyfoodavailability +PSS_sum+DEMO_Age+RaceCategorical+
+                   aSES_01+aSES_02,preprocessed_data %>% filter(Gender3C=="Female"))))
+
+
+```
+So let's include household income....
+
+Try marital status...
+```{r}
+preprocessed_data$marital_status <- factor(preprocessed_data$aSES_11)
+```
+
+
+```{r}
+
+#preprocessed_data$household_income_per_person <- preprocessed_data$aSES_02/
+
+print(summary(lm(cancer_promoting_minus_preventing_FFQ~FCI_cancer_promoting+FCI_craved_cancer_preventing+FCI_liked_cancer_preventing+FCI_liked_cancer_promoting+ MESA_healthyfoodavailability +PSS_sum+Gender3C+DEMO_Age+RaceCategorical+
+                   aSES_02+marital_status
+                   ,preprocessed_data)))
+
+
+print(summary(lm(cancer_promoting_minus_preventing_FFQ~FCI_cancer_promoting+FCI_craved_cancer_preventing+FCI_liked_cancer_preventing+FCI_liked_cancer_promoting+ MESA_healthyfoodavailability +PSS_sum+DEMO_Age+RaceCategorical+
+                   aSES_02+marital_status,preprocessed_data %>% filter(Gender3C=="Female"))))
+
+
+```
+
+
+No difference. hmm.
+
+OK, that about does it. We still have the EDM and EAFH and perhaps some others. Some of these are psychological but I don't know how to theoretically include in the model.
+
+Others are really outcomes. Still we should proceed with including them to see how much we can maximize our predictive power.
+
+Or are we more interested in using a tree model or similar to try to optimally understand this data. 
+
+I want tosee if we can do a bit more with social class. So we can include rurality, but also household income per person...
+
+```{r}
+
+
+print(summary(lm(cancer_promoting_minus_preventing_FFQ~FCI_cancer_promoting+FCI_craved_cancer_preventing+FCI_liked_cancer_preventing+FCI_liked_cancer_promoting+ MESA_healthyfoodavailability +PSS_sum+DEMO_Age+RaceCategorical+
+                   aSES_02+RuralZIP,preprocessed_data %>% filter(Gender3C=="Female"))))
+
+
+```
+Let's get household income per person
+
+```{r}
+preprocessed_data$HouseholdIncomeBucket <- NA
+
+preprocessed_data$HouseholdIncomeBucket[preprocessed_data$aSES_02==1]<-25000/2
+preprocessed_data$HouseholdIncomeBucket[preprocessed_data$aSES_02==2]<-mean(c(25000,34999))
+preprocessed_data$HouseholdIncomeBucket[preprocessed_data$aSES_02==3]<-mean(c(35000,49999))
+preprocessed_data$HouseholdIncomeBucket[preprocessed_data$aSES_02==4]<-mean(c(50000,74999))
+preprocessed_data$HouseholdIncomeBucket[preprocessed_data$aSES_02==5]<-mean(c(75000,99999))
+preprocessed_data$HouseholdIncomeBucket[preprocessed_data$aSES_02==6]<-mean(c(100000,149999))
+preprocessed_data$HouseholdIncomeBucket[preprocessed_data$aSES_02==7]<-150000
+
+
+#gotta clean up the person column
+preprocessed_data$aSES_03[preprocessed_data$aSES_03=="5    Sister  Niece  nephew  Friend  me"]<-5
+preprocessed_data$aSES_03[preprocessed_data$aSES_03=="3 adults"]<-3
+preprocessed_data$aSES_03[preprocessed_data$aSES_03=="2 kids,3 adults,"]<-5
+preprocessed_data$aSES_03[preprocessed_data$aSES_03=="3 adults 1 child"]<-4
+preprocessed_data$aSES_03[preprocessed_data$aSES_03=="four"]<-4
+preprocessed_data$aSES_03[preprocessed_data$aSES_03=="40000"]<-NA
+preprocessed_data$aSES_03<-as.numeric(preprocessed_data$aSES_03)
+preprocessed_data$aSES_03[preprocessed_data$aSES_03==0]<-1
+preprocessed_data$HouseholdIncomeBucketPerPerson <- preprocessed_data$HouseholdIncomeBucket/preprocessed_data$aSES_03
+table(preprocessed_data$HouseholdIncomeBucketPerPerson)
+
+```
+
+```{r}
+
+print(summary(lm(cancer_promoting_minus_preventing_FFQ~FCI_cancer_promoting+FCI_craved_cancer_preventing+FCI_liked_cancer_preventing+FCI_liked_cancer_promoting+ MESA_healthyfoodavailability +PSS_sum+Gender3C+DEMO_Age+RaceCategorical+
+                   HouseholdIncomeBucketPerPerson
+                   ,preprocessed_data)))
+
+
+print(summary(lm(cancer_promoting_minus_preventing_FFQ~FCI_cancer_promoting+FCI_craved_cancer_preventing+FCI_liked_cancer_preventing+FCI_liked_cancer_promoting+ MESA_healthyfoodavailability +PSS_sum+DEMO_Age+RaceCategorical+
+                   HouseholdIncomeBucketPerPerson,preprocessed_data %>% filter(Gender3C=="Female"))))
+
+
+```
+
+OK not going to include household income per person--works less well than straight household income.
+How about other demo factors:ladder, education status
+
+
+```{r}
+
+print(summary(lm(cancer_promoting_minus_preventing_FFQ~FCI_cancer_promoting+FCI_craved_cancer_preventing+FCI_liked_cancer_preventing+FCI_liked_cancer_promoting+ MESA_healthyfoodavailability +PSS_sum+Gender3C+DEMO_Age+RaceCategorical+
+                   aSES_02+DEMO_8+DEMO_4
+                   ,preprocessed_data)))
+
+
+print(summary(lm(cancer_promoting_minus_preventing_FFQ~FCI_cancer_promoting+FCI_craved_cancer_preventing+FCI_liked_cancer_preventing+FCI_liked_cancer_promoting+ MESA_healthyfoodavailability +PSS_sum+DEMO_Age+RaceCategorical+
+                   aSES_02+DEMO_8+DEMO_4,
+                 preprocessed_data %>% filter(Gender3C=="Female"))))
+```
+That's quite surprising!
+
+OK. I think we've done all we can regarding demographics, and adding various features related to my model. Where does that leave us?
+
+thinking about the way I'm modeling, I want interaction effects between my key variables:
+
+ - FCI_craving
+ - FCI_liking
+ - MESA_food_availability
+ 
+ 
+
+```{r}
+#DV is - higher is less healthy
+#MESA- higher is more healthy
+#so cancer_promoting*Mesa predicting our DV should be positive
+#cancer_reventing*Mesa predicting DV should be negative.
+print(summary(lm(cancer_promoting_minus_preventing_FFQ~
+                   FCI_cancer_promoting*MESA_healthyfoodavailability+
+                   FCI_craved_cancer_preventing*MESA_healthyfoodavailability+
+                   FCI_liked_cancer_preventing*MESA_healthyfoodavailability+
+                   FCI_liked_cancer_promoting*MESA_healthyfoodavailability+
+                   PSS_sum+Gender3C+DEMO_Age+RaceCategorical+
+                   aSES_02+DEMO_8+DEMO_4
+                   ,preprocessed_data)))
+
+
+print(summary(lm(cancer_promoting_minus_preventing_FFQ~
+                    FCI_cancer_promoting*MESA_healthyfoodavailability+
+                   FCI_craved_cancer_preventing*MESA_healthyfoodavailability+
+                   FCI_liked_cancer_preventing*MESA_healthyfoodavailability+
+                   FCI_liked_cancer_promoting*MESA_healthyfoodavailability+
+                   PSS_sum+DEMO_Age+RaceCategorical+
+                   aSES_02+DEMO_8+DEMO_4,
+                 preprocessed_data %>% filter(Gender3C=="Female"))))
+```
+ 
+
+## BMI
+
+```{r}
+print(summary(lm(BMI~FCI_cancer_promoting+FCI_craved_cancer_preventing+FCI_liked_cancer_preventing+FCI_liked_cancer_promoting+ MESA_healthyfoodavailability +PSS_sum+DEMO_Age+RaceCategorical+
+                   aSES_02+RuralZIP + Gender3C,preprocessed_data)))
+
+
+print(summary(lm(BMI~FCI_cancer_promoting+FCI_craved_cancer_preventing+FCI_liked_cancer_preventing+FCI_liked_cancer_promoting+ MESA_healthyfoodavailability +PSS_sum+DEMO_Age+RaceCategorical+
+                   aSES_02+RuralZIP,preprocessed_data %>% filter(Gender3C=="Female"))))
+
+
+
+```
+
+## supplementary outcome measures
+
+```{r}
+print(summary(lm(BMI~FCI_cancer_promoting+FCI_craved_cancer_preventing+FCI_liked_cancer_preventing+FCI_liked_cancer_promoting+ MESA_healthyfoodavailability +PSS_sum+DEMO_Age+RaceCategorical+
+                   aSES_02+RuralZIP + Gender3C+EAFH_fastfoodpast30days,preprocessed_data)))
+
+
+print(summary(lm(BMI~FCI_cancer_promoting+FCI_craved_cancer_preventing+FCI_liked_cancer_preventing+FCI_liked_cancer_promoting+ MESA_healthyfoodavailability +PSS_sum+DEMO_Age+RaceCategorical+
+                   aSES_02+RuralZIP+EAFH_fastfoodpast30days,preprocessed_data %>% filter(Gender3C=="Female"))))
+
+```
+
+
+
+## supplementary outcome measures
+
+```{r}
+print(summary(lm(BMI~FCI_cancer_promoting+FCI_craved_cancer_preventing+FCI_liked_cancer_preventing+FCI_liked_cancer_promoting+ MESA_healthyfoodavailability +PSS_sum+DEMO_Age+RaceCategorical+
+                   aSES_02+RuralZIP + Gender3C+EAFH_fastfoodpast30days+EDM_forwardscore+EDM_reversescored,preprocessed_data)))
+
+
+print(summary(lm(BMI~FCI_cancer_promoting+FCI_craved_cancer_preventing+FCI_liked_cancer_preventing+FCI_liked_cancer_promoting+ MESA_healthyfoodavailability +PSS_sum+DEMO_Age+RaceCategorical+
+                   aSES_02+RuralZIP+EAFH_fastfoodpast30days+EDM_forwardscore+EDM_reversescored,preprocessed_data %>% filter(Gender3C=="Female"))))
+
+```
+```{r}
+print(summary(lm(BMI~FCI_cancer_promoting+FCI_craved_cancer_preventing+FCI_liked_cancer_preventing+FCI_liked_cancer_promoting+ MESA_healthyfoodavailability +PSS_sum+DEMO_Age+RaceCategorical+
+                   aSES_02+RuralZIP+EAFH_fastfoodpast30days+EDM_forwardscore+EDM_reversescored+FFQh_sum+AFSM+MESA_neighborhoodconnectedness+MESA_safetyfromcrime,preprocessed_data %>% filter(Gender3C=="Female"))))
+```
+
+Now take away predictors that seem really irrelevant
+
+```{r}
+print(summary(lm(BMI~FCI_cancer_promoting+FCI_craved_cancer_preventing+FCI_liked_cancer_preventing+FCI_liked_cancer_promoting+ MESA_healthyfoodavailability +DEMO_Age+RaceCategorical+
+                   aSES_02+RuralZIP+EDM_reversescored+FFQh_sum,preprocessed_data %>% filter(Gender3C=="Female"))))
+```
+
+Hang on a moment! How come RuralZIP is no longer important
+
+```{r}
+print(summary(lm(BMI~FCI_cancer_promoting+FCI_craved_cancer_preventing+FCI_liked_cancer_preventing+FCI_liked_cancer_promoting+ MESA_healthyfoodavailability +DEMO_Age+RaceCategorical+
+                   aSES_02+RuralZIP+EDM_reversescored+FFQh_sum,preprocessed_data %>% filter(Gender3C=="Female"))))
+```
+
+hmmm. There's some weird gender effect.
+
+If we do the same model but include only men:
+
+
+```{r}
+print(summary(lm(BMI~FCI_cancer_promoting+FCI_craved_cancer_preventing+FCI_liked_cancer_preventing+FCI_liked_cancer_promoting+ MESA_healthyfoodavailability +DEMO_Age+RaceCategorical+
+                   aSES_02+RuralZIP+EDM_reversescored+FFQh_sum,preprocessed_data %>% filter(Gender3C=="Male"))))
+```
+
+Are men driving the effect then? It's rural men vs. urban men?
+
+Cutting it down to a simple model:
+
+
+```{r}
+ print(summary(lm(BMI~RuralZIP+MESA_healthyfoodavailability+DEMO_Age+Gender+RaceCategorical,preprocessed_data)))
+```
+
+```{r}
+print(summary(lm(BMI~MESA_healthyfoodavailability+RuralZIP+DEMO_Age+RaceCategorical,preprocessed_data %>% filter(Gender3C=="Female"))))
+print(summary(lm(BMI~MESA_healthyfoodavailability+RuralZIP+DEMO_Age+RaceCategorical,preprocessed_data %>% filter(Gender3C=="Male"))))
+```
+
+It's come back, below, by including the interaction of FFQ and gender.
+```{r}
+print(summary(lm(BMI~FFQ_cancer_promoting*Gender3C+ FFQ_cancer_preventing*Gender3C+FCI_craved_cancer_preventing+FCI_liked_cancer_preventing+FCI_liked_cancer_promoting+ MESA_healthyfoodavailability +PSS_sum+DEMO_Age+RaceCategorical+
+                   aSES_02+RuralZIP+EAFH_fastfoodpast30days+EDM_forwardscore+EDM_reversescored+FFQh_sum+AFSM+MESA_neighborhoodconnectedness+MESA_safetyfromcrime,preprocessed_data)))
+```
+
+OK, so--the lesson here is that if we include all of the avilable data, there's a reasonably strong rural effect that we just can't explain away with ANY of the current measures we have here.
+
+
+```{r}
+print(summary(lm(BMI~FFQ_cancer_promoting*Gender3C+ FFQ_cancer_preventing*Gender3C+FCI_craved_cancer_preventing+FCI_liked_cancer_preventing+FCI_liked_cancer_promoting+ MESA_healthyfoodavailability +PSS_sum+DEMO_Age+I(DEMO_Age^2)+RaceCategorical+
+                   aSES_02+RuralZIP+EAFH_fastfoodpast30days+EDM_forwardscore+EDM_reversescored+FFQh_sum+AFSM+MESA_neighborhoodconnectedness+MESA_safetyfromcrime,preprocessed_data)))
+```
+
+
+
+
+
+```{r}
+print(summary(lm(BMI~FFQ_cancer_promoting*Gender3C+ FFQ_cancer_preventing*Gender3C+FCI_craved_cancer_preventing+FCI_liked_cancer_preventing+FCI_liked_cancer_promoting+ MESA_healthyfoodavailability +PSS_sum+DEMO_Age+I(DEMO_Age^2)+RaceCategorical+
+                   aSES_02+RuralZIP+EAFH_fastfoodpast30days+EDM_forwardscore+EDM_reversescored+FFQh_sum+AFSM+MESA_neighborhoodconnectedness+MESA_safetyfromcrime,preprocessed_data)))
+```
+
+
+Trying that full model but only women:
+
+
+```{r}
+print(summary(lm(BMI~FFQ_cancer_promoting+ FFQ_cancer_preventing+FCI_craved_cancer_preventing+FCI_liked_cancer_preventing+FCI_liked_cancer_promoting+ MESA_healthyfoodavailability +PSS_sum+DEMO_Age+I(DEMO_Age^2)+RaceCategorical+
+                   aSES_02+RuralZIP+EAFH_fastfoodpast30days+EDM_forwardscore+EDM_reversescored+FFQh_sum+AFSM+MESA_neighborhoodconnectedness+MESA_safetyfromcrime,
+                 preprocessed_data %>% filter(Gender3C=="Female"))))
+```
+
+No effect at all.
+
+And only men:
+
+
+
+```{r}
+print(summary(lm(BMI~FFQ_cancer_promoting+ FFQ_cancer_preventing+FCI_craved_cancer_preventing+FCI_liked_cancer_preventing+FCI_liked_cancer_promoting+ MESA_healthyfoodavailability +PSS_sum+DEMO_Age+I(DEMO_Age^2)+RaceCategorical+
+                   aSES_02+RuralZIP+EAFH_fastfoodpast30days+EDM_forwardscore+EDM_reversescored+FFQh_sum+AFSM+MESA_neighborhoodconnectedness+MESA_safetyfromcrime,
+                 preprocessed_data %>% filter(Gender3C=="Male"))))
+```
+
+```{r}
+ggplot(preprocessed_data %>% filter(Gender3C %in% c("Male","Female")), aes(x=interaction(Gender3C,RuralZIP),y=BMI,group=interaction(RuralZIP,Gender3C), color=RuralZIP))+
+  geom_boxplot()+geom_jitter()
+```
+
+
+Yep we have a big difference.
+
+So:
+
+ - Models with only women in them and a limit set of explanatory variables have a weak rurality effect
+ - Models with only women in them and include the full set of variables I have available to me have no rurality effect at all
+ - Models with only men in them and a limited set of explanatory variables have a strong rurality effect
+ - Models with only men in them and include the full set of variables have an equally strong rurality effect.
+ 
+In other words, our rural-urban divide is mainly in men, not in women, and the smaller divide that exists in women can be largely explained (or explained into non-significance) by including a variety of explanatory measures.
+
+
+Perhaps we should follow-up with a further analysis aimed explicitly at explaining rural-urban divide in an exploratory way.
+

@@ -1,0 +1,236 @@
+---
+title: "Rural environment Paper"
+output:
+  html_document:
+    df_print: paged
+---
+
+We plan a paper on the rural environment, based on data here: https://docs.google.com/document/d/18f048q1x7UAKwgjXP7UNRuAT6Ad3XBXZHAi3dFYO2U4/edit#heading=h.n0uc8s3dggzu .
+
+
+# Setup
+
+```{r}
+library(stringr)
+library(rstatix)
+library(foreign)
+library(stringr)
+library(dplyr)
+library(ggplot2)
+library(data.table)
+```
+
+Set directories
+
+```{r}
+Sys.setenv(R_CONFIG_ACTIVE = Sys.info()["nodename"])
+data_dir <- config::get("rural_data_dir")
+hints5_filepath <- config::get("hints_protected_data_folderpath")
+```
+
+
+
+# Original
+
+
+```{r}
+source("orfcs_utilities.R")
+library(magrittr)
+library(dplyr)
+
+
+preprocessed_data_filepath <- paste0(data_dir,"cloudresearch_survey_results/orfcs_preprocessed2_anon_by_subj.csv")
+#preprocessed_data_filepath <- paste0(config::get("orfcs_shareable_folder"),"oregon_dataset_anon.csv")
+
+library(readr)
+library(ggplot2)
+library(GGally)
+orfcs_dataset <- readr::read_csv(preprocessed_data_filepath)
+
+#have to do this here because the file was saved in CSV, which converts factors to strings.
+orfcs_dataset$Education_Categorical<-factor(
+  orfcs_dataset$Education_Categorical,
+  #levels=3:9,
+  labels=c("No high school diploma",
+           "High school diploma/GED",
+           "Some college credit, no degree",
+           "Trade, technical, or vocational training",
+           "Associate's degree",
+           "Bachelor's degree",
+           "Master's, Professional, or doctoral degree")
+)
+
+orfcs_dataset$Education_Ordinal<-as.integer(orfcs_dataset$Education_Categorical)
+
+
+```
+
+
+
+```{r}
+#orfcs_dataset %>% filter(is.na(BMI)) %>% dplyr::select(WEIGHT,HEIGHT_m) %>% is.na %>% colSums
+orfcs_dataset %>% filter(!is.na(BMI) & !is.na(Gender3C) & !is.na(RuralZIP) & !is.na(PSS_z) & !is.na(DEMO_Age_c) & !is.na(Gender3C) & !is.na(RaceC2)) %>% .$RuralZIP %>% table
+orfcs_dataset %>% filter(!is.na(cancer_promoting_minus_preventing_FFQ) & !is.na(Gender3C) & !is.na(RuralZIP) & !is.na(PSS_z) & !is.na(DEMO_Age_c) & !is.na(Gender3C) & !is.na(RaceC2)) %>% .$RuralZIP %>% table
+predict_ffq_rural <- lm(cancer_promoting_minus_preventing_FFQ~RuralZIP+
+                    #MESA_healthyfoodavailability+MESA_safetyfromcrime+
+                      PSS_z+
+                    DEMO_Age_c+Gender3C+RaceC2,
+                  orfcs_dataset)
+print(summary(predict_ffq_rural))
+print(confint(predict_ffq_rural))
+
+predict_bmi_rural <- lm(BMI~RuralZIP+
+                    #MESA_healthyfoodavailability+MESA_safetyfromcrime
+                      PSS_z+
+                    DEMO_Age_c+Gender3C+RaceC2,
+                  orfcs_dataset)
+print(summary(predict_bmi_rural))
+print(confint(predict_bmi_rural))
+
+```
+
+
+
+# Shareable
+
+
+
+
+```{r}
+source("orfcs_utilities.R")
+library(magrittr)
+library(dplyr)
+
+
+preprocessed_data_filepath <- paste0(config::get("orfcs_shareable_folder"),"oregon_dataset_anon.csv")
+
+library(readr)
+library(ggplot2)
+library(GGally)
+orfcs_shareable <- readr::read_csv(preprocessed_data_filepath)
+
+#have to do this here because the file was saved in CSV, which converts factors to strings.
+orfcs_shareable$Education_Categorical<-factor(
+  orfcs_shareable$Education_Categorical,
+  #levels=3:9,
+  labels=c("No high school diploma",
+           "High school diploma/GED",
+           "Some college credit, no degree",
+           "Trade, technical, or vocational training",
+           "Associate's degree",
+           "Bachelor's degree",
+           "Master's, Professional, or doctoral degree")
+)
+
+orfcs_shareable$Education_Ordinal<-as.integer(orfcs_shareable$Education_Categorical)
+
+```
+
+
+
+```{r}
+#orfcs_dataset %>% filter(is.na(BMI)) %>% dplyr::select(WEIGHT,HEIGHT_m) %>% is.na %>% colSums
+orfcs_shareable %>% filter(!is.na(BMI) & !is.na(Gender3C) & !is.na(RuralZIP) & !is.na(PSS_z) & !is.na(DEMO_Age_c) & !is.na(Gender3C) & !is.na(RaceC2)) %>% .$RuralZIP %>% table
+orfcs_shareable %>% filter(!is.na(cancer_promoting_minus_preventing_FFQ) & !is.na(Gender3C) & !is.na(RuralZIP) & !is.na(PSS_z) & !is.na(DEMO_Age_c) & !is.na(Gender3C) & !is.na(RaceC2)) %>% .$RuralZIP %>% table
+predict_ffq_rural <- lm(cancer_promoting_minus_preventing_FFQ~RuralZIP+
+                      PSS_z+
+                    DEMO_Age_c+Gender3C+RaceC2,
+                  orfcs_shareable)
+print(summary(predict_ffq_rural))
+print(confint(predict_ffq_rural))
+
+predict_bmi_rural <- lm(BMI~RuralZIP+
+                      PSS_z+
+                    DEMO_Age_c+Gender3C+RaceC2,
+                  orfcs_shareable)
+print(summary(predict_bmi_rural))
+print(confint(predict_bmi_rural))
+
+
+
+```
+
+
+# Comparison
+
+```{r}
+orfcs_shareable[,c("BMI","RuralZIP","PSS_z","DEMO_Age_c","Gender3C","RaceC2")]
+```
+
+
+
+```{r}
+orfcs_dataset[,c("BMI","RuralZIP","PSS_z","DEMO_Age_c","Gender3C","RaceC2")]
+```
+Right--which things are different between these datasets that create the small differences in outcomes and what do we do here?
+
+```{r}
+match_matrix <- orfcs_shareable[,c("BMI","RuralZIP","PSS_z","DEMO_Age_c","Gender3C","RaceC2")]==orfcs_dataset[,c("BMI","RuralZIP","PSS_z","DEMO_Age_c","Gender3C","RaceC2")]
+
+print(colSums(match_matrix,na.rm = TRUE))
+print(colSums(match_matrix==FALSE,na.rm = TRUE))
+
+
+```
+
+Okay, so--the BMI column is the only one containing differences. It's because I'm rounding BMI. Could I maybe round it to 0.1 instead of 1?
+
+Let's take for example, one item
+```{r}
+
+round(60^2/175,1)
+
+```
+
+Let's go from BMI of 18 to a BMI of 35, increment by 0.3. How many different ways are there to get to each BMI point?
+
+```{r}
+bmi_combo_count_vec<-c()
+for (target_bmi in (18+1:180*0.1)){
+   target_bmi<-round(target_bmi,1) #get around floating point problems which occasionally arise.
+   cat(target_bmi)
+
+   #need to do this in feet & inches and pounds
+   # HEIGHT_m =(HEIGHT_1*12+HEIGHT_2)*2.54/100,
+   #  WEIGHT_kg = WEIGHT/2.20462
+   ways_to_be_this_bmi_count<-0
+   ways_to_be_this_bmi_str <- ""
+   for (weight_lb in 90:400){
+      for(height_inches in (4.5*12):(7*12)){
+         weight_kg <- weight_lb/2.20462
+         height_m <- height_inches*2.54/100
+         
+         
+         #print(paste(weight_kg,height_m))
+         #get a text string representing height in ft and inches
+         height_ft_inches <- paste0(floor(height_inches/12), "'",round(height_inches %%12))
+         bmi_rounded = round(weight_kg/height_m^2,1)
+         
+         if(bmi_rounded==target_bmi){
+            ways_to_be_this_bmi_count=ways_to_be_this_bmi_count+1
+            ways_to_be_this_bmi_str<-paste0(ways_to_be_this_bmi_str,weight_lb, ", ", height_ft_inches, " | ")
+         }
+         
+      }
+   }
+   cat(paste0(": ",as.character(ways_to_be_this_bmi_count)," ways to be this BMI\n"))
+   cat(ways_to_be_this_bmi_str)
+   cat("\n")
+   bmi_combo_count_vec = c(bmi_combo_count_vec, c(ways_to_be_this_bmi_count) )
+}
+
+```
+
+
+```{r}
+#demonstrating some floating point problems
+which(round((18+1:180*0.1),1)==28.7)
+which(as.character((18+1:180*0.1))==as.character(28.7))
+```
+
+```{r}
+print(bmi_combo_count_vec)
+
+```
+
+OK so there are always lots of ways to be each of these BMIs, in combinations of feet and inches; therefore, we don't have to worry about denonymizing due to 1 d.p. rounded BMIs. Prefer to include them because the results will be close to that we obtained in the original analyses.

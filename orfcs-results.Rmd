@@ -1,0 +1,607 @@
+---
+title: "explore_orfcs_pilot_results"
+author: "Ben Smith"
+date: "10/19/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(lubridate)
+
+library(magrittr)
+library(dplyr)
+library(readr)
+library(tidyverse)
+print(getwd())
+source("orfcs_utilities.R")
+Sys.setenv(R_CONFIG_ACTIVE = Sys.info()["nodename"])
+data_dir <- config::get("rural_data_dir")
+#data_dir <- "/Users/benjaminsmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/"
+
+data_key <- read_csv(paste0(data_dir, "cloudresearch_survey_results/ORFCS Bespoke CR2_November 2, 2021_11.47_key.csv")) %>% t %>% data.frame
+data_key <- cbind("colkey" = rownames(data_key),data_key)
+rownames(data_key) <- NULL
+colnames(data_key) <- c("question_key","question_text","import_json")
+```
+
+
+### scorequaltrics formatted
+
+To use the rubric scorer we really have to use the Scorequaltrics package from the start...
+Next we need to 
+(1) Exclude participants with too much missing data
+
+(2) code up the scales. we can use the same scale coders that are used for the the mainstream DEV dataset. Maybe? 
+
+```{r}
+
+if (!require(tidyverse)) {install.packages('tidyverse')}
+if (!require(knitr)) {install.packages('knitr')}
+if (!require(devtools)) {install.packages('devtools')}
+if (!require(scorequaltrics)) {devtools::install_github('dcosme/qualtrics', ref = "dev/enhance")}
+if (!require(ggcorrplot)) {install.packages('ggcorrplot')}
+```
+
+```{r}
+
+cred_file_location = config::get('qualtrics_credentials')
+#keep_columns = '(Login|ResponseId|Finished|SID)'
+survey_name_filter = '(Oregon Rural Food Consumption|ORFCS)'
+#sid_pattern = 'DEV[0-9]{3}$'
+#exclude_sid = '^99|DEV999|DEV000|DEV998|DEV737' # subject IDs to exclude
+# identifiable_data = c('IPAddress', "RecipientEmail", "RecipientLastName", "RecipientFirstName",
+#                       "LocationLatitude", "LocationLongitude") # exclude when printing duplicates
+
+output_file_dir = "~/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/"
+
+rubric_dir = '/Users/benjaminsmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/DEV_scoring_rubrics'
+
+```
+
+```{r}
+credentials = scorequaltrics::creds_from_file(cred_file_location)
+
+# filter
+surveysAvail = scorequaltrics::get_surveys(credentials)
+surveysFiltered = filter(surveysAvail, grepl(survey_name_filter, SurveyName))
+
+#knitr::kable(arrange(select(surveysFiltered, SurveyName), SurveyName))
+
+```
+
+
+
+```{r}
+
+rubric_dir = config::get('rubric_dir')#
+
+# specify rubric paths
+scoring_rubrics = data.frame(file = dir(file.path(rubric_dir), 
+                                        pattern = '.*scoring_rubric.*.csv',
+                                        full.names = TRUE))
+
+# read in rubrics
+scoring_data_long = scorequaltrics::get_rubrics(scoring_rubrics, type = 'scoring')
+# print the first 10 rows
+head(scoring_data_long[, -1], 10)
+```
+
+
+
+
+
+```{r getsurveydata, results="hide"}
+# get data
+surveys_long = scorequaltrics::get_survey_data(surveysFiltered,
+                                               pid_col = "aid") #%>%
+               #filter(!item %in% identifiable_data)# %>% #filter out identifiable data
+              #mutate(SID=coalesce(SID_1,Login)) %>% #combine the SID_1 and Login cols
+              #select(-SID_1,-Login) #remove them from the old columns
+
+# print first 10 rows
+head(surveys_long, 10)
+```
+## Filter
+
+Let's filter at this point
+
+```{r}
+rejections <- readr::read_csv(paste0(data_dir, "cloudresearch_survey_results/exclude_subjects.csv"))
+
+surveys_long_clean <- surveys_long %>% 
+  filter((aid %in% rejections$aid)==FALSE) %>% #remove rejected entries
+  filter(!is.na(aid)) #remove entries where there's no aid; probably test runs by experimenters
+#some subjects entered multiple times. need to find those and only get the most recently completed survey.
+
+```
+
+
+## scale scores
+
+
+```{r}
+
+# get only the items used in the scoring rubrics.
+scoring = scorequaltrics::get_rubrics(scoring_rubrics, type = 'scoring')
+
+# score
+scored = scorequaltrics::score_questionnaire(surveys_long_clean, scoring, SID = "aid", psych = FALSE)
+
+# print first 200 rows
+head(scored, 10)
+
+scored$score <- as.numeric(scored$score)
+```
+
+
+
+```{r}
+promote_minus_prevent <- scored %>% 
+  #filter for FFQ
+  filter(scale_name %in% c("FFQ","FCI")) %>%
+  #filter for the two cols we're interested in
+  filter(scored_scale %in% c(
+    "cancer_promoting","cancer_preventing","craved_cancer_promoting","liked_cancer_promoting","craved_cancer_preventing","liked_cancer_preventing")) %>%
+  #throw it out wide
+  dplyr::select(SID,scored_scale,score,survey_name,scale_name) %>% tidyr::pivot_wider(names_from = scored_scale,values_from = score) %>%
+  #create a composite measure
+  mutate("cancer_promoting_minus_preventing"=cancer_promoting-cancer_preventing,
+         "cancer_promoting_minus_preventing_craved"=craved_cancer_promoting-craved_cancer_preventing,
+         "cancer_promoting_minus_preventing_liked"=liked_cancer_promoting-liked_cancer_preventing
+         ) %>%
+  #wide across the surveys so that we can compare the surveys
+  dplyr::select(scale_name,survey_name,SID,cancer_promoting_minus_preventing,
+         cancer_promoting_minus_preventing_craved,cancer_promoting_minus_preventing_liked,
+         cancer_promoting,cancer_preventing
+         ) %>% 
+  tidyr::pivot_wider(id_cols=c("SID","survey_name"),
+                     names_from=scale_name,
+                     values_from=c(
+    "cancer_promoting_minus_preventing",
+    "cancer_promoting_minus_preventing_craved",
+    "cancer_promoting_minus_preventing_liked",
+    "cancer_promoting","cancer_preventing"
+    )
+    )
+```
+
+### Have a go doing some data cleaning
+
+EDM has some reverse-scored items. That's useful for working out which participants may not be answering the survey seriously.
+
+
+```{r}
+
+```
+
+
+### Look at open-ended feedback.
+
+```{r}
+surveys_long_clean %>% filter(item=="Q157" & !is.na(value)) %>% .$value %>% paste(sep=" | ",collapse = " | ")
+```
+
+
+### Manually scale data
+What else do we have to score?
+
+ - IPAQ--I think we have to score this using custom code
+ - ZIP Codes
+ - eventually, more detailed location data.
+ 
+ 
+ Remove PII first:
+ 
+```{r}
+#this is protected data as long as it has birthdates; need to be careful!
+
+demographic_vec <- grepl("(DEMO|aSES)",surveys_long_clean$item)
+#health_vec <- grepl("(HEIGHT|WEIGHT)",surveys_long_clean$item)
+#IPAQ_vec <- grepl("IPAQ",surveys_long_clean$item)
+metadata <- grepl("StartDate",surveys_long_clean$item)
+non_scale_data_protected_long <- surveys_long_clean[demographic_vec | metadata,]
+#throw it out wide
+non_scale_data_protected <- non_scale_data_protected_long %>% filter(!is.na(value)) %>% tidyr::pivot_wider(id_cols=c("aid","survey_name"),names_from="item",values_from="value")
+#demographic_data_protected_multi<- demographic_data_protected_long %>% filter(!is.na(value)) %>% tidyr::pivot_wider(id_cols=c("aid","survey_name"),names_from="item",values_from="value",values_fn=length)
+
+non_scale_key <- data_key %>% filter(colSums(sapply(data_key$question_key,function(cname){grepl(cname,colnames(non_scale_data_protected))}))>0)
+
+age_col_key <- data_key[data_key$question_text=="What is your birth date? (mm/dd/yyyy)","question_key"]
+#now anonymize some of this demo data
+#https://discuss.analyticsvidhya.com/t/extract-date-and-time-from-unix-timestamp-in-r/1883/2
+non_scale_data_protected$DEMO_Age <- interval(
+  lubridate::as_date(non_scale_data_protected[[age_col_key]],format="%m/%d/%Y"),
+  lubridate::as_date(lubridate::as_datetime(as.numeric(non_scale_data_protected$StartDate),origin="1970-01-01"))
+) /years(1)
+
+non_scale_data_protected[age_col_key]=NULL
+non_scale_data <- non_scale_data_protected
+
+```
+
+
+## Manually processed non-scale data
+
+
+Then do other data cleaning on it.
+
+
+ 
+```{r}
+
+
+## TO DO: process this into more readable data. for now, we'll just leave as-is.
+
+non_scale_key$easy_names<-non_scale_key$question_text
+non_scale_key$easy_names[grepl("ladder",non_scale_key$question_text)]<-"ladder"
+non_scale_key$easy_names[grepl("gender identity\\? - Selected Choice",non_scale_key$question_text)]<-"Gender"
+
+#https://stackoverflow.com/questions/40105262/how-to-revert-one-hot-encoded-variable-back-into-single-column
+# reverse_one_hot <- function(one_hot_data){
+#   w <- which(one_hot_data=="1", arr.ind = T)
+#   transformed_col <- colnames(one_hot_data)[w[order(w[,1]),2]]
+#   return(transformed_col)
+# }
+# race_col_raw <- sub("DEMO_3b_","",reverse_one_hot(demographic_data[,grepl(pattern = "DEMO_3b_\\d",colnames(demographic_data))]))
+race_code_list <- list("White"=1,"Black"=2,"American Indian or Alaska Native"=3,
+                       "Chinese"=4,"Vietnamese"=5,"Native Hawaiian"=6,
+                       "Filipino"=7,"Korean"=8,"Samoan"=9,
+                       "Asian Indian"=10,"Japanese"=11,"Chamorro"=12,
+                       "Other Asian"=13,"Other Pacific Islander"=14,"Some other race"=15)
+race_code<-list()#rep(list(),nrow(demographic_data))
+# race_code <- rep("",nrow(demographic_data))
+# for (n in race_code_list){
+#   col_to_check <- paste0("DEMO_3b_", n)
+#   col_match <- !is.na(demographic_data[col_to_check])
+#   
+#   race_code[col_match] <- paste(race_code[col_match],names(race_code_list)[race_code_list==n])
+# }
+# unlist(sapply(as.numeric(race_col_raw),function(x){names(race_code_list)[which(race_code_list==x)]}))
+# as.numeric(race_col_raw)
+
+# demo_3b_responses <- colnmaes(which(demographic_data[,grepl(pattern = "DEMO_3b_\\d",colnames(demographic_data))]=="1",arr.ind = TRUE)
+
+for (rn in race_code_list){
+  old_race_col_name <- paste0("DEMO_3b_",rn)
+  race_col_name <- paste0("DEMO_3b_",names(race_code_list)[race_code_list==rn])
+  if(old_race_col_name %in% colnames(non_scale_data)){
+    non_scale_data[old_race_col_name] <- as.logical(!is.na(non_scale_data[old_race_col_name]))
+    colnames(non_scale_data)[colnames(non_scale_data)==old_race_col_name] <- race_col_name
+    
+    
+  }
+  #non_scale_data[is.na(non_scale_data[race_col_name]),race_col_name] <- 0
+}
+#apply(non_scale_data[colnames(non_scale_data)[grepl("DEMO_3b",colnames(non_scale_data))]],2,table)
+
+#colnames(non_scale_data)[grepl("DEMO_3b",colnames(non_scale_data))]
+
+#hispanic status - don't need to change this. but for reference, 1==not Hispanic; 2+ are variations on Hispanic.
+table(non_scale_data$DEMO_3a,non_scale_data$`DEMO_3b_Native Hawaiian`)
+non_scale_data$Demo_3a_IsHispanicLatinoSpanish <- (non_scale_data$DEMO_3a=="1")==FALSE
+non_scale_data$Demo_3a_IsHispanicLatinoSpanish[is.na(non_scale_data$DEMO_3a)] <- FALSE
+table(non_scale_data$Demo_3a_IsHispanicLatinoSpanish,non_scale_data$`DEMO_3b_Native Hawaiian`)
+#1==Female, 2==Male, 3==Non-binary, 4==Other specified
+
+```
+ 
+
+## Get some data from the CSVs
+
+The score_qualtrics package can be quite awkward for data that aren't actually scales. For that data, I'm going to pull it manually from the CSVs I downloaded.
+
+```{r}
+#data_dir <- "/Users/benjaminsmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/"
+
+full_merged_results <- get_orfcs_survey_data(data_dir)
+
+full_merged_results$PptZIPCode<-full_merged_results$DEMO_6
+
+#there are several places we could go for the ZIP code....
+full_merged_results$PptZIPCode[is.na(full_merged_results$DEMO_6)]<- full_merged_results$Address_3[is.na(full_merged_results$DEMO_6)]
+
+#only use the first 5 characters of the zip code
+full_merged_results$PptZIPCode <- stringr::str_trunc(full_merged_results$PptZIPCode,5)
+
+
+#Based on `match_ppt_to_ruca_with_zip_code.Rmd`.
+#Now we want to get the RUCA codes.
+#Now, match the participant ZIP Codes to the RUCA 2010
+ppts_with_zip_ruca <- match_ppts_with_ruca_zipcode(data_dir, full_merged_results)
+ppts_with_zip_ruca$RuralZIP <- ppts_with_zip_ruca$RUCA1>=4
+
+#match participants to zip code info including household income
+ppts_with_zip_ruca <- match_ppts_with_zipcode_data(data_dir, ppts_with_zip_ruca)
+
+#exclude participants in the exclusion list
+ppts_via_csv_all_cols <- ppts_with_zip_ruca[(ppts_with_zip_ruca$aid %in% rejections$aid)==FALSE,]
+
+ppts_via_csv_all_cols %<>% rename(RUCA_Description=Description)
+
+#SELECT DATA
+#now we only want specified and vetted cols from this data, to ensure we don't include any PII
+
+ppt_cols <-c("aid","HEIGHT_1","HEIGHT_2","WEIGHT","RuralZIP","RUCA_Description","ZipcodeMedianHouseholdIncome", "Q200_2")
+ppts_via_csv<-ppts_via_csv_all_cols[,ppt_cols]
+
+
+#CLEAN DATA
+ppts_via_csv$WEIGHT<-as.numeric(ppts_via_csv$WEIGHT)
+
+#ADD PROCESSED COLS
+ppts_via_csv %<>% 
+  mutate(
+    HEIGHT_m =(HEIGHT_1*12+HEIGHT_2)*2.54/100,
+    WEIGHT_kg = WEIGHT/2.20462
+  ) %>% 
+  mutate(
+    BMI = WEIGHT_kg/HEIGHT_m^2
+  ) %>%
+  rename(
+    "FFQ_HomegrownVegetables"=Q200_2
+  )
+  # mutate(
+  #   FFQ_HomegrownVegetables=case_when(
+  #     Q200_2=="Never in last 2 weeks" ~ 1,
+  #     Q200_2=="1-3 times in last 2 weeks" ~ 2,
+  #     Q200_2=="4-6 times in last 2 weeks" ~ 3,
+  #     Q200_2=="7-9 times in last 2 weeks" ~ 4,
+  #     Q200_2=="10-13 times in last 2 weeks" ~ 5,
+  #     Q200_2=="Daily or more in last 2 weeks" ~ 6,
+  #     TRUE ~ NA
+  #   )
+
+ppts_via_csv$FFQ_HomegrownVegetables <- factor(
+  ppts_via_csv$FFQ_HomegrownVegetables,
+  levels=c("Never in last 2 weeks", "1-3 times in last 2 weeks", "4-6 times in last 2 weeks",
+           "7-9 times in last 2 weeks", "10-13 times in last 2 weeks", "Daily or more in last 2 weeks"
+           )
+  )
+ppts_via_csv$FFQ_HomegrownVegetables_ln <- log(as.numeric(ppts_via_csv$FFQ_HomegrownVegetables))
+```
+Why so many NA zip codes? Can we get more subjects?
+```{r}
+full_merged_results[is.na(full_merged_results$PptZIPCode),]
+full_merged_results$Address_1[is.na(full_merged_results$PptZIPCode)]
+#don't think so.
+```
+
+```{r}
+
+
+adult_food_security_scorer <- function(ppts_via_csv){
+  
+  afsm_df <- data.frame(index=1:nrow(ppts_via_csv))
+  afsm_df[,"hh2"] <- ppts_via_csv$HH2=="Often true" | ppts_via_csv$HH2=="Sometimes true"
+  afsm_df[,"hh3"] <- ppts_via_csv$HH3=="Often true" | ppts_via_csv$HH3=="Sometimes true"
+  afsm_df[,"hh4"] <- ppts_via_csv$HH4=="Often true" | ppts_via_csv$HH4=="Sometimes true"
+  
+  afsm_df[,"ad1"] <- ppts_via_csv$AD1=="Yes"
+  afsm_df[,"ad1a"] <- ppts_via_csv$AD1a=="Almost every month" | ppts_via_csv$AD1a=="Some months but not every month"
+  afsm_df[,"ad2"] <- ppts_via_csv$AD2=="Yes"
+  afsm_df[,"ad3"] <- ppts_via_csv$AD3=="Yes"
+  afsm_df[,"ad4"] <- ppts_via_csv$AD4=="Yes"
+  afsm_df[,"ad5"] <- ppts_via_csv$AD5=="Yes"
+  afsm_df[,"ad5a"] <- ppts_via_csv$Q101=="Yes"
+  raw_score = rowSums(afsm_df[,2:ncol(afsm_df)],na.rm = TRUE)
+  
+  return(raw_score)
+}
+ppts_via_csv$AFSM <- adult_food_security_scorer(ppts_via_csv_all_cols)
+
+```
+
+
+
+
+## Post-process scales 
+
+
+```{r}
+scored$score <- as.numeric(scored$score)
+scored$scale_subscale_name <- paste0(scored$scale_name,"_",scored$scored_scale)
+scored_wide <- scored %>% dplyr::select(SID,scale_subscale_name,score) %>% 
+  tidyr::pivot_wider(names_from = scale_subscale_name,values_from = score)
+```
+ 
+ 
+ 
+## Merge together
+
+
+ 
+```{r}
+
+
+ppts_by_row <- merge(scored_wide,non_scale_data,by.x="SID",by.y="aid",all=TRUE) %>% 
+  merge(ppts_via_csv,by.x="SID",by.y="aid",all.x=FALSE,all.y=TRUE) %>% 
+  merge(promote_minus_prevent,by="SID",all.x=TRUE,all.y=FALSE)
+
+
+#ses_processed_data <- get_demo_data(surveys_long_clean,)
+```
+
+Previous versions of this file accidentally introduced some extra subjects into the analysis here, but none of them will be included in the final analysis because they miss basic things like demographic variables that were part of all analyses.
+
+```{r}
+colnames(ppts_via_csv)
+
+```
+
+## Post-merge processing
+
+Some things require data across these different pathways so we process that here.
+
+
+```{r}
+
+get_ipaq_summary <- function(ipaq_data){
+  ipaq_data$IPAQ_walkingMETminutes <- ipaq_data$IPAQ_walkingminutes* 3.3
+  ipaq_data$IPAQ_moderateMETminutes <- ipaq_data$IPAQ_moderateminutes* 4.0
+  ipaq_data$IPAQ_vigorousMETminutes <- ipaq_data$IPAQ_vigorousminutes* 8.0
+  ipaq_data$IPAQ_total_METminutes <-ipaq_data$IPAQ_walkingMETminutes + ipaq_data$IPAQ_moderateMETminutes+ ipaq_data$IPAQ_vigorousMETminutes
+  ipaq_data$IPAQ_MET_kCal <- ipaq_data$IPAQ_total_METminutes * ipaq_data$WEIGHT_kg/60
+  return(ipaq_data)
+}
+
+
+ppts_by_row <- get_ipaq_summary(ppts_by_row)
+```
+
+
+Alright! that's a great first start. We do have one or two extra scales to add:
+
+ - FFQ-homegrown extension
+ - Eating Away From Home
+ - Adult Food Security (3 modules)
+ - Perceived Stress Scale
+
+Should be easy enough--probably just writing up new CSV files.
+
+```{r}
+colnames(ppts_by_row)
+```
+```{r}
+
+ppts_by_row$Gender <- factor(as.numeric(ppts_by_row$DEMO_5),levels=1:4,labels=c("Female","Male","Non-binary","Other"))
+
+ppts_by_row$Gender3C <-ppts_by_row$Gender
+ppts_by_row$Gender3C[ppts_by_row$Gender=="Non-binary"] <- "Other"
+ppts_by_row$Gender3C <- as.factor(as.character(ppts_by_row$Gender3C))
+
+
+ppts_by_row$RuralZIP <- as.factor(ppts_by_row$RuralZIP)
+#race*ethnicity
+#
+#Categories will be "White Alone" "Hispanic White", "Other Hispanic", "Japanese"... and any group with 20 
+#apply(ppts_by_row[colnames(ppts_by_row)[grepl("DEMO_3b",colnames(ppts_by_row))]],2,table)
+race_response_count <- rowSums(ppts_by_row[c("Demo_3a_IsHispanicLatinoSpanish",colnames(ppts_by_row)[grepl("DEMO_3b.*[^TEXT]$",colnames(ppts_by_row))])])
+ppts_by_row$RaceCategorical <- ""
+ppts_by_row$RaceCategorical[(race_response_count<=1) & (ppts_by_row$DEMO_3b_White==TRUE)] <- "WhiteOnly"
+#ppts_by_row$RaceCategorical[(ppts_by_row$DEMO_3b_White==TRUE) & ppts_by_row$Demo_3a_IsHispanicLatinoSpanish & (race_response_count==2)] <- "WhiteHispanic"
+#ppts_by_row$RaceCategorical[ppts_by_row$DEMO_3b_Japanese] <- "Japanese"
+ppts_by_row$RaceCategorical[ppts_by_row$Demo_3a_IsHispanicLatinoSpanish] <- "HispanicAnyRace"
+ppts_by_row$RaceCategorical[(
+  ppts_by_row$DEMO_3b_Japanese |
+  ppts_by_row$DEMO_3b_Chinese | 
+    ppts_by_row$DEMO_3b_Vietnamese | 
+    ppts_by_row$DEMO_3b_Filipino | 
+    ppts_by_row$DEMO_3b_Korean | 
+    ppts_by_row$`DEMO_3b_Asian Indian`
+)] <- "Asian"
+ppts_by_row$RaceCategorical[ppts_by_row$`DEMO_3b_Native Hawaiian` | ppts_by_row$DEMO_3b_Samoan | ppts_by_row$DEMO_3b_Chamorro] <- "HawaiianOtherPacificIslander"
+ppts_by_row$RaceCategorical[ppts_by_row$RaceCategorical==""]<-"OtherRace"
+ppts_by_row$RaceCategorical[race_response_count==0]<-"RaceNotReported"
+#nb: "OtherHispanic" excludes respondents in "HawaiianOtherPacificIslander", and "Asian" Categories.
+ppts_by_row$RaceCategorical <- factor(ppts_by_row$RaceCategorical,levels=c("WhiteOnly","Asian","HispanicAnyRace","HawaiianOtherPacificIslander","OtherRace","RaceNotReported"))
+
+
+ppts_by_row$RuralZIP <- as.factor(ppts_by_row$RuralZIP)
+```
+
+
+```{r}
+readr::write_csv(ppts_by_row,file = paste0(data_dir,"cloudresearch_survey_results/orfcs_preprocessed_anon_by_subj.csv"))
+```
+
+
+we have added a subsequent set of preprocessing that will be saved separately.
+```{r}
+
+library(magrittr)
+library(dplyr)
+library(readr)
+library(ggplot2)
+library(GGally)
+
+preprocessed_data_filepath <- paste0(data_dir,"cloudresearch_survey_results/orfcs_preprocessed_anon_by_subj.csv")
+
+preprocessed_data_raw <- readr::read_csv(preprocessed_data_filepath)
+ggplot(preprocessed_data_raw,aes(x=EDM_forwardscore,y=EDM_reversescored))+geom_point(alpha=0.3)
+
+cor.test(preprocessed_data_raw$EDM_forwardscore,
+         preprocessed_data_raw$EDM_reversescored
+         )
+
+```
+
+
+```{r}
+
+
+rows_to_remove <- ((preprocessed_data_raw$EDM_forwardscore<2 & preprocessed_data_raw$EDM_reversescored>4) |
+  (preprocessed_data_raw$EDM_forwardscore>=4.5 & preprocessed_data_raw$EDM_reversescored<2))
+rows_to_remove[is.na(rows_to_remove)]<-FALSE
+sum(rows_to_remove)
+sub_ids_to_remove <- preprocessed_data_raw[rows_to_remove,"SID"]
+preprocessed_data <- preprocessed_data_raw %>% filter((SID %in% unlist(sub_ids_to_remove))==FALSE)
+preprocessed_data$BMI_c <- preprocessed_data$BMI - mean(preprocessed_data$BMI,na.rm=TRUE)
+
+preprocessed_data$DEMO_Age_c <- preprocessed_data$DEMO_Age-38 #using U.S. median age
+
+preprocessed_data$RaceCategorical<-factor(preprocessed_data$RaceCategorical,levels=unique(preprocessed_data$RaceCategorical))
+
+preprocessed_data$RuralZIP_i <- as.numeric(preprocessed_data$RuralZIP)
+preprocessed_data$RaceC2 <- as.character(preprocessed_data$RaceCategorical)
+preprocessed_data$RaceC2[preprocessed_data$RaceC2=="RaceNotReported"] <- "OtherRaceRaceNotReported"
+preprocessed_data$RaceC2[preprocessed_data$RaceC2=="OtherRace"] <- "OtherRaceRaceNotReported"
+preprocessed_data$RaceC2 <-factor(preprocessed_data$RaceC2,levels=names(sort(table(preprocessed_data$RaceC2),decreasing=TRUE)))
+preprocessed_data$RaceC2 <- preprocessed_data$RaceC2
+
+#need to remove this one data point for data quality issue.
+preprocessed_data[!is.na(preprocessed_data$WEIGHT) & preprocessed_data$WEIGHT>500,c("WEIGHT","WEIGHT_kg","BMI")] <- NA
+rm(preprocessed_data_raw)
+
+zscore <- function(x){
+  return((x-mean(x,na.rm=TRUE))/sd(x,na.rm=TRUE))
+}
+
+preprocessed_data$FFQ_fruits_ln_z <- as.numeric(preprocessed_data$FFQ_fruits) %>% log %>% zscore
+preprocessed_data$FFQ_vegetables_ln_z <- as.numeric(preprocessed_data$FFQ_vegetables) %>% log %>% zscore
+preprocessed_data$FFQ_fruit_vegetables_z <- (as.numeric(preprocessed_data$FFQ_fruits) + as.numeric(preprocessed_data$FFQ_vegetables)) %>% log %>% zscore
+
+
+
+#11 is doctoral degree; 12+ are "other" and "decline to answer"
+preprocessed_data$DEMO_4[preprocessed_data$DEMO_4>11]<-NA
+
+preprocessed_data$Education_Categorical <- preprocessed_data$DEMO_4
+preprocessed_data$Education_Categorical <- preprocessed_data$DEMO_4
+preprocessed_data$Education_Categorical[preprocessed_data$DEMO_4<3] <- 3 #very few under three so we'll move them up
+#very few over 9, so we move them down
+preprocessed_data$Education_Categorical[preprocessed_data$DEMO_4>9] <- 9
+#now add descriptors
+preprocessed_data$Education_Categorical<-factor(
+  preprocessed_data$Education_Categorical,
+  levels=3:9,
+  labels=c("No high school diploma",
+           "High school diploma/GED",
+           "Some college credit, no degree",
+           "Trade, technical, or vocational training",
+           "Associate's degree",
+           "Bachelor's degree",
+           "Master's, Professional, or doctoral degree")
+)
+
+#put self-report items in z-score. It wont' change the estimate but it will make it easier to interpret
+
+preprocessed_data %<>% 
+  mutate(
+    MESA_healthyfoodavailability_z =zscore(MESA_healthyfoodavailability),
+    MESA_safetyfromcrime_z =zscore(MESA_safetyfromcrime),
+    PSS_z = zscore(PSS_sum),
+    cancer_promoting_minus_preventing_FFQ_z = zscore(cancer_promoting_minus_preventing_FFQ),
+    DEMO_Age_c = DEMO_Age - mean(DEMO_Age,na.rm=TRUE), #center age, but do not z-score it.
+    aSES_02_z = zscore(aSES_02)
+  )
+
+
+```
+
+
+
+```{r}
+readr::write_csv(preprocessed_data,file = paste0(data_dir,"cloudresearch_survey_results/orfcs_preprocessed2_anon_by_subj.csv"))
+```

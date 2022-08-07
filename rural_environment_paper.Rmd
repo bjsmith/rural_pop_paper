@@ -1,0 +1,760 @@
+---
+title: "Rural environment Paper"
+output:
+  html_document:
+    df_print: paged
+---
+
+We plan a paper on the rural environment, based on data here: https://docs.google.com/document/d/18f048q1x7UAKwgjXP7UNRuAT6Ad3XBXZHAi3dFYO2U4/edit#heading=h.n0uc8s3dggzu .
+
+If this is run with ORFCS data downloaded from the publicly available dataset, the results here might differ slightly from those presented in the paper. The results in the paper use unrounded BMIs (calculated from feet and inches) whereas the publicly avialalbe results have BMIs rounded to one decimal place, in order to protect anonmynity.
+
+# Setup
+
+```{r}
+library(stringr)
+library(rstatix)
+library(foreign)
+library(stringr)
+library(dplyr)
+library(ggplot2)
+library(data.table)
+```
+
+Set directories
+
+```{r}
+Sys.setenv(R_CONFIG_ACTIVE = Sys.info()["nodename"])
+data_dir <- config::get("rural_data_dir")
+hints5_filepath <- config::get("hints_protected_data_folderpath")
+```
+
+
+
+## Setup the ORFCS dataset
+
+
+```{r}
+source("orfcs_utilities.R")
+library(magrittr)
+library(dplyr)
+
+
+#preprocessed_data_filepath <- paste0(data_dir,"cloudresearch_survey_results/orfcs_preprocessed2_anon_by_subj.csv")
+preprocessed_data_filepath <- paste0(config::get("orfcs_shareable_folder"),"oregon_dataset_anon.csv")
+
+library(readr)
+library(ggplot2)
+library(GGally)
+orfcs_dataset <- readr::read_csv(preprocessed_data_filepath)
+
+#have to do this here because the file was saved in CSV, which converts factors to strings.
+orfcs_dataset$Education_Categorical<-factor(
+  orfcs_dataset$Education_Categorical,
+  #levels=3:9,
+  labels=c("No high school diploma",
+           "High school diploma/GED",
+           "Some college credit, no degree",
+           "Trade, technical, or vocational training",
+           "Associate's degree",
+           "Bachelor's degree",
+           "Master's, Professional, or doctoral degree")
+)
+
+orfcs_dataset$Education_Ordinal<-as.integer(orfcs_dataset$Education_Categorical)
+
+
+```
+
+
+
+```{r}
+source("orfcs_utilities.R")
+library(magrittr)
+library(dplyr)
+
+
+#preprocessed_data_filepath <- paste0(data_dir,"cloudresearch_survey_results/orfcs_preprocessed2_anon_by_subj.csv")
+preprocessed_data_filepath <- paste0(config::get("orfcs_shareable_folder"),"oregon_dataset_anon.csv")
+
+library(readr)
+library(ggplot2)
+library(GGally)
+orfcs_dataset2 <- readr::read_csv(preprocessed_data_filepath)
+
+#have to do this here because the file was saved in CSV, which converts factors to strings.
+orfcs_dataset2$Education_Categorical<-factor(
+  orfcs_dataset2$Education_Categorical,
+  #levels=3:9,
+  labels=c("No high school diploma",
+           "High school diploma/GED",
+           "Some college credit, no degree",
+           "Trade, technical, or vocational training",
+           "Associate's degree",
+           "Bachelor's degree",
+           "Master's, Professional, or doctoral degree")
+)
+
+orfcs_dataset2$Education_Ordinal<-as.integer(orfcs_dataset2$Education_Categorical)
+```
+
+
+```{r}
+#https://www.rdocumentation.org/packages/mediation/versions/4.5.0/topics/mediate
+library(mediation)
+boot_times = 10 # set this to 10000 for final analysis, and 100 for setting up
+```
+
+## Set up the HINTS dataset
+
+
+```{r warning=FALSE}
+source("HINTS_preprocessing.R")
+hines_cycle5 <-get_hints5(hints5_filepath)
+
+```
+
+# Summary stats
+
+```{r}
+orfcs_dataset %>% group_by(RuralZIP) %>% count()
+```
+```{r}
+hines_cycle5 %>% group_by(HINTSIsRural) %>% count()
+```
+
+
+
+#Findings
+
+## Pre-registered: A rural-urban BMI (and FFQ???) difference in Oregon, controlling for demographics
+
+
+```{r}
+#orfcs_dataset %>% filter(is.na(BMI)) %>% dplyr::select(WEIGHT,HEIGHT_m) %>% is.na %>% colSums
+orfcs_dataset %>% filter(!is.na(BMI) & !is.na(Gender3C) & !is.na(RuralZIP) & !is.na(PSS_z) & !is.na(DEMO_Age_c) & !is.na(Gender3C) & !is.na(RaceC2)) %>% .$RuralZIP %>% table
+orfcs_dataset %>% filter(!is.na(cancer_promoting_minus_preventing_FFQ) & !is.na(Gender3C) & !is.na(RuralZIP) & !is.na(PSS_z) & !is.na(DEMO_Age_c) & !is.na(Gender3C) & !is.na(RaceC2)) %>% .$RuralZIP %>% table
+predict_ffq_rural <- lm(cancer_promoting_minus_preventing_FFQ~RuralZIP+
+                    #MESA_healthyfoodavailability+MESA_safetyfromcrime+
+                      PSS_z+
+                    DEMO_Age_c+Gender3C+RaceC2,
+                  orfcs_dataset)
+print(summary(predict_ffq_rural))
+print(confint(predict_ffq_rural))
+
+predict_bmi_rural <- lm(BMI~RuralZIP+
+                    #MESA_healthyfoodavailability+MESA_safetyfromcrime
+                      PSS_z+
+                    DEMO_Age_c+Gender3C+RaceC2,
+                  orfcs_dataset)
+print(summary(predict_bmi_rural))
+print(confint(predict_bmi_rural))
+
+```
+
+
+
+How does this look when including the quadratic term for age?
+
+```{r}
+predict_bmi_rural <- lm(BMI~RuralZIP+
+                    #MESA_healthyfoodavailability+MESA_safetyfromcrime
+                      PSS_z+
+                    DEMO_Age_c+I(DEMO_Age_c^2)+Gender3C+RaceC2,
+                  orfcs_dataset)
+summary(predict_bmi_rural)
+
+```
+
+
+A post-hoc follow-up confirms this is a difference in a nationwide HINTS dataset
+
+```{r}
+
+data_to_measure <- hines_cycle5 %>% 
+  filter(SelfGender %in% c("Male","Female"))
+
+summary(lm(BMI~Age_c+I(Age_c^2)+HINTSIsRural_i+SelfGender+RacePP+filename,data_to_measure))
+#summary(lm(BMI~Age_c+I(Age_c^2)+HINTSIsRural_i*SelfGender+RacePP+filename,data_to_measure))
+
+```
+
+
+## Pre-registered: food availability mediates BMI-rurality relationship
+
+
+```{r}
+
+predict_bmi_rural <- lm(BMI~RuralZIP_i+
+                    MESA_healthyfoodavailability_z+MESA_safetyfromcrime_z+
+                      PSS_z+
+                    DEMO_Age_c+Gender3C+RaceC2,
+                  orfcs_dataset)
+summary(predict_bmi_rural)
+```
+
+
+
+```{r mediation1_zip_food_availability}
+set.seed(6472426)
+library(mediation)
+
+data_to_measure <- orfcs_dataset %>% filter(!is.na(BMI) & Gender3C %in% c("Male","Female"))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(MESA_healthyfoodavailability_z~RuralZIP_i+Gender3C+DEMO_Age_c+RaceC2+PSS_z,data_to_measure)
+mc <- lm(BMI~RuralZIP_i+Gender3C+DEMO_Age_c+RaceC2+MESA_healthyfoodavailability_z+PSS_z,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=boot_times, boot=TRUE,boot.ci.type = "bca", treat="RuralZIP_i",mediator="MESA_healthyfoodavailability_z")
+summary(mediate_result)
+summary(mc)
+```
+
+We could not do a follow-up with healthy food availability in the HINTS dataset because we have no MESA measure in the HINTS dataset.
+
+## Follow-up food availability mediation with the quadratic age term.
+
+
+```{r}
+
+predict_bmi_rural <- lm(BMI~RuralZIP_i+
+                    MESA_healthyfoodavailability_z+MESA_safetyfromcrime_z+
+                      PSS_z+
+                    DEMO_Age_c+I(DEMO_Age_c^2)+Gender3C+RaceC2,
+                  orfcs_dataset)
+summary(predict_bmi_rural)
+```
+
+
+```{r mediation1quadratic_age}
+set.seed(4794382)
+library(mediation)
+
+data_to_measure <- orfcs_dataset %>% filter(!is.na(BMI) & Gender3C %in% c("Male","Female"))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(MESA_healthyfoodavailability_z~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceC2+PSS_z,data_to_measure)
+mc <- lm(BMI~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceC2+MESA_healthyfoodavailability_z+PSS_z,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=boot_times, boot=TRUE,boot.ci.type = "bca", treat="RuralZIP_i",mediator="MESA_healthyfoodavailability_z")
+summary(mediate_result)
+summary(mc)
+```
+
+## BMIs of 25 or over
+
+
+```{r}
+predict_bmi_rural <- lm(BMI~RuralZIP+
+                    #MESA_healthyfoodavailability+MESA_safetyfromcrime
+                      PSS_z+
+                    DEMO_Age_c+I(DEMO_Age_c^2)+Gender3C+RaceC2,
+                  orfcs_dataset %>% filter(orfcs_dataset$BMI>=25))
+summary(predict_bmi_rural)
+
+```
+
+
+```{r}
+
+
+data_to_measure <- hines_cycle5 %>% 
+  filter(SelfGender %in% c("Male","Female") & BMI>=25.0)
+
+summary(lm(BMI~Age_c+I(Age_c^2)+HINTSIsRural_i+SelfGender+RacePP+filename,data_to_measure))
+#summary(lm(BMI~Age_c+I(Age_c^2)+HINTSIsRural_i*SelfGender+RacePP+filename,data_to_measure))
+
+```
+
+## Analyses on household Income
+
+### Household income mediates the BMI-rurality relationship 
+
+
+
+In the Oregon data:
+```{r mediation2}
+set.seed(2498714)
+
+library(mediation)
+
+data_to_measure <- orfcs_dataset %>% dplyr::filter(!is.na(BMI)) %>% dplyr::filter(!is.na(BMI) & Gender3C %in% c("Male","Female"))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(aSES_02_z~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceC2+PSS_z#+
+         ,data_to_measure)
+mc <- lm(BMI~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceC2+aSES_02_z+PSS_z#+
+         ,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=boot_times,boot=TRUE,boot.ci.type = "bca",
+                          treat="RuralZIP_i",mediator="aSES_02_z")
+summary(mediate_result)
+plot(mediate_result)
+
+summary(mc)
+```
+
+and in the nationwide HINTS dataset:
+
+
+```{r mediation3}
+set.seed(2708803)
+#model is:
+data_to_measure <- hines_cycle5 %>% 
+  filter( !is.na(HHInc_r) & !is.na(BMI) & Gender3C %in% c("Male","Female"))
+
+
+#Rurality -> Income -> BMI
+mb <- lm(HHInc_r~Age_c+I(Age_c^2)+Gender3C+HINTSIsRural_i+RacePP+filename+Fruit_vegetables_z,data_to_measure)
+mc <- lm(BMI~Age_c+I(Age_c^2)+Gender3C+HINTSIsRural_i+RacePP+filename+Fruit_vegetables_z+HHInc_r,data_to_measure)
+
+income_mediation <- mediate(mb,mc,sims=boot_times, boot=TRUE,boot.ci.type = "bca",
+                            treat="HINTSIsRural_i",mediator="HHInc_r")
+summary(income_mediation)
+plot(income_mediation)
+#lm(HHInc_r~BMIdata_to_measure$,data_to_measure$)
+cor.test(data_to_measure$HHInc_r,as.numeric(data_to_measure$HINTSIsRural_i))
+
+summary(mc)
+
+```
+
+### household income mediates the rurality-food availability relationship in the Oregon data
+
+
+```{r mediation4}
+library(mediation)
+set.seed(45348321)
+data_to_measure <- orfcs_dataset %>% filter(!is.na(MESA_healthyfoodavailability_z)) %>% filter(!is.na(MESA_healthyfoodavailability_z) & Gender3C %in% c("Male","Female"))
+
+#Rurality -> Income -> BMI
+
+
+mb <- lm(aSES_02_z~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceC2+PSS_z
+           #FFQ_cancer_preventing+FFQ_cancer_promoting+
+           # IPAQ_total_METminutes+
+           # MESA_neighborhoodconnectedness+
+           # MESA_safetyfromcrime+
+           # EDM_mean+
+            # cancer_promoting_minus_preventing_liked_FCI+
+            # cancer_promoting_minus_preventing_craved_FCI
+         ,data_to_measure)
+mc <- lm(MESA_healthyfoodavailability~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceC2+aSES_02_z+PSS_z
+           #FFQ_cancer_preventing+FFQ_cancer_promoting+
+           # IPAQ_total_METminutes+
+           # MESA_neighborhoodconnectedness+
+           # MESA_safetyfromcrime+
+           # EDM_mean+
+            # cancer_promoting_minus_preventing_liked_FCI+
+            # cancer_promoting_minus_preventing_craved_FCI
+         ,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=boot_times,boot=TRUE,boot.ci.type = "bca",
+                          treat="RuralZIP_i",mediator="aSES_02_z")
+summary(mediate_result)
+summary(mc)
+
+```
+
+### The food availability mediation above disappears when controlling for income...
+
+
+
+
+
+```{r mediation5}
+set.seed(54948339)
+data_to_measure <- orfcs_dataset %>% filter(!is.na(BMI)) %>% filter(!is.na(BMI) & Gender3C %in% c("Male","Female"))
+
+#Rurality -> Income -> BMI
+#
+
+mb <- lm(MESA_healthyfoodavailability~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceC2+
+           aSES_02_z+PSS_z
+           #FFQ_cancer_preventing+FFQ_cancer_promoting+
+           # IPAQ_total_METminutes+
+           # MESA_neighborhoodconnectedness+
+           # MESA_safetyfromcrime+
+           # EDM_mean+
+            # cancer_promoting_minus_preventing_liked_FCI+
+            # cancer_promoting_minus_preventing_craved_FCI
+         ,data_to_measure)
+mc <- lm(BMI~RuralZIP_i+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceC2+MESA_healthyfoodavailability_z+
+           aSES_02_z+PSS_z
+           #FFQ_cancer_preventing+FFQ_cancer_promoting+
+           # IPAQ_total_METminutes+
+           # MESA_neighborhoodconnectedness+
+           # MESA_safetyfromcrime+
+           # EDM_mean+
+            # cancer_promoting_minus_preventing_liked_FCI+
+            # cancer_promoting_minus_preventing_craved_FCI
+         ,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=boot_times,boot=TRUE,boot.ci.type = "bca",
+                          treat="RuralZIP_i",mediator="MESA_healthyfoodavailability_z")
+summary(mediate_result)
+summary(mc)
+```
+
+### ...and income mediates the relationship between food availability and BMI across the Oregon dataset
+
+
+
+
+```{r mediation6}
+set.seed(33527146)
+
+data_to_measure <- orfcs_dataset %>% filter(!is.na(BMI)) %>% filter(!is.na(BMI) & Gender3C %in% c("Male","Female") & !is.na(PSS_z))
+
+#Rurality -> Income -> BMI
+#
+
+mb <- lm(aSES_02_z~MESA_healthyfoodavailability_z+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceC2+PSS_z
+         ,data_to_measure)
+mc <- lm(BMI~MESA_healthyfoodavailability_z+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceC2+PSS_z+aSES_02_z
+         ,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=boot_times,boot=TRUE,boot.ci.type = "bca",
+                          treat="MESA_healthyfoodavailability_z",mediator="aSES_02_z")
+summary(mediate_result)
+#summary(mb)
+summary(mc)
+```
+
+## fruit consumption and healthy food availability
+
+
+
+### Post-hoc: BMI-Fruit & Veggies relationship holds for the Oregon and HINTs datasets
+
+#### DEV????
+
+#### Oregon
+
+
+```{r}
+
+
+predict_bmi_rural <- lm(BMI~FFQ_fruit_vegetables_z+
+                    #MESA_healthyfoodavailability+MESA_safetyfromcrime
+                      PSS_z+
+                    DEMO_Age_c+I(DEMO_Age_c^2)+Gender3C+RaceC2,
+                  orfcs_dataset)
+summary(predict_bmi_rural)
+
+
+```
+
+#### HINTS
+
+
+```{r}
+data_to_measure <- hines_cycle5
+
+
+summary(lm(BMI~Age_c+Gender3C+RacePP+Fruit_vegetables_z,data_to_measure))
+summary(lm(BMI~Age_c+I(Age_c^2)+Gender3C+RacePP+filename+Fruit_vegetables_z,data_to_measure))
+summary(lm(BMI~Age_c+I(Age_c^2)+Gender3C+RacePP+filename+Fruit_vegetables_z+I(Fruit_vegetables_z^2),data_to_measure))
+
+
+```
+
+
+### Fruit (and vegetable???) consumption mediates the relationship between healthy food availability and BMI
+
+
+
+#### Oregon
+
+
+```{r mediation7}
+
+set.seed(25296177)
+
+data_to_measure <- orfcs_dataset %>% filter(!is.na(BMI) & !is.na(MESA_healthyfoodavailability_z) & !is.na(FFQ_fruit_vegetables_z) & !is.na(RuralZIP) &Gender3C %in% c("Female", "Male"))
+
+# treatment MESA_healthyfoodavailability
+# mediator FFQ_fruits_ln_z
+
+mb <- lm(FFQ_fruit_vegetables_z~MESA_healthyfoodavailability_z+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceC2,data_to_measure)
+mc <- lm(BMI~            MESA_healthyfoodavailability_z+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceC2+FFQ_fruit_vegetables_z,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=boot_times,boot=TRUE,boot.ci.type = "bca",
+                          treat="MESA_healthyfoodavailability_z",mediator="FFQ_fruit_vegetables_z")
+summary(mediate_result)
+summary(mb)
+summary(mc)
+
+```
+
+#### HINTS
+
+
+
+```{r mediation8}
+
+set.seed(96734053)
+data_to_measure <- hines_cycle5 %>% 
+  filter(!is.na(HHInc_r) & !is.na(BMI) & !is.na(Fruit_vegetables_z))
+
+
+#Rurality -> Income -> BMI
+mb <- lm(Fruit_vegetables_z~Age_c+I(Age_c^2)+HINTSIsRural_i+RacePP+filename+HHInc_r,data_to_measure)
+mc <- lm(BMI~Age_c+I(Age_c^2)+HINTSIsRural_i+RacePP+filename+HHInc_r+Fruit_vegetables_z,data_to_measure)
+
+vegetables_mediation <- mediate(mb,mc,sims=boot_times, boot=TRUE,boot.ci.type = "bca",
+                                treat="HINTSIsRural_i",mediator="Fruit_vegetables_z")
+summary(vegetables_mediation)
+summary(mc)
+
+```
+
+
+## fruit consumption and rurality (mainly interesting as a general proxy for healthy eating)
+
+Fruit consumption mediates the relationship between rurality and BMI in the national dataset, though not the Oregon dataset; based on the effect size found in the national dataset, the sample size in the Oregon dataset is too small.
+
+
+```{r mediation9}
+set.seed(70213575)
+
+#Rurality -> Income -> BMI
+mb <- lm(Fruit_vegetables_z~Age_c+I(Age_c^2)+HINTSIsRural_i+RacePP+filename+HHInc_r,data_to_measure)
+mc <- lm(BMI~Age_c+I(Age_c^2)+HINTSIsRural_i+RacePP+filename+HHInc_r+Fruit_vegetables_z,data_to_measure)
+
+fruit_mediation <- mediate(mb,mc,sims=boot_times, boot=TRUE,boot.ci.type = "bca",
+                           treat="HINTSIsRural_i",mediator="Fruit_vegetables_z")
+summary(fruit_mediation)
+summary(mc)
+
+```
+
+
+```{r mediation10}
+set.seed(30567291)
+
+data_to_measure <- orfcs_dataset %>% filter(!is.na(BMI) & !is.na(MESA_healthyfoodavailability_z) & !is.na(FFQ_fruit_vegetables_z) & !is.na(RuralZIP_i) & Gender3C %in% c("Female", "Male"))
+
+
+
+mb <- lm(FFQ_fruit_vegetables_z~RuralZIP_i+MESA_healthyfoodavailability_z+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceC2+PSS_z,data_to_measure)
+mc <- lm(BMI~            RuralZIP_i+MESA_healthyfoodavailability_z+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceC2+PSS_z+FFQ_fruit_vegetables_z,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=boot_times, boot=TRUE,boot.ci.type = "bca",
+                          treat="RuralZIP_i",mediator="FFQ_fruit_vegetables_z")
+summary(mediate_result)
+summary(mb)
+summary(mc)
+
+```
+
+## Linear model of everything we've tested here including demographics not usually measured
+
+```{r}
+
+orfcs_dataset$HHIncome_z <- zscore(orfcs_dataset$aSES_02_z)
+orfcs_dataset$ZipcodeMedianHouseholdIncome_z <- zscore(orfcs_dataset$ZipcodeMedianHouseholdIncome)
+orfcs_dataset$IPAQ_total_METminutes_z <- zscore(orfcs_dataset$IPAQ_total_METminutes)
+orfcs_comprehensive_model <- lm(BMI~DEMO_Age_c+I(DEMO_Age_c^2)+Gender3C+RaceC2+PSS_z
+    +Education_Ordinal
+   +RuralZIP_i
+   +MESA_healthyfoodavailability_z+MESA_safetyfromcrime
+   +FFQ_fruit_vegetables_z
+   +IPAQ_total_METminutes_z
+   +ZipcodeMedianHouseholdIncome_z
+   +HHIncome_z,orfcs_dataset)
+library(apaTables)
+
+apa.reg.table(orfcs_comprehensive_model)
+
+```
+
+
+```{r}
+table(hines_cycle5$Education)
+hines_cycle5$EducationalAchievement<-as.integer(hines_cycle5$EducationOrdinal)
+
+# orfcs_dataset$HHIncome_z <- zscore(orfcs_dataset$aSES_02_z)
+hines_cycle5$HHInc_r_z <- zscore(hines_cycle5$HHInc_r)
+HINTS_comprehensive_model <- lm(BMI~Age_c+I(Age_c^2)+Gender3C+RacePP
+    +EducationalAchievement
+   +HINTSIsRural_i
+   +Fruit_vegetables_z
+   +filename
+   +HHInc_r_z,hines_cycle5)
+library(apaTables)
+
+hints_bmi_table<-apa.reg.table(HINTS_comprehensive_model)
+#apa.reg.table(HINTS_comprehensive_model,paste0(data_dir , "/hints_bmi_apa_out.doc"))
+
+```
+
+```{r}
+apa_HINTS <- apa.reg.table(HINTS_comprehensive_model)
+```
+
+
+
+```{r}
+table(hines_cycle5$Education)
+
+# orfcs_dataset$HHIncome_z <- zscore(orfcs_dataset$aSES_02_z)
+hines_cycle5$HHInc_r_z <- zscore(hines_cycle5$HHInc_r)
+HINTS_genhealth_comprehensive_model <- lm(GeneralHealth_i~Age_c+I(Age_c^2)+Gender3C+RacePP
+    +EducationalAchievement
+   +HINTSIsRural_i
+   +Fruit_vegetables_z
+   +filename
+   +HHInc_r_z,hines_cycle5)
+library(apaTables)
+
+HINTS_genhealth_model_df <- apa.reg.table(HINTS_genhealth_comprehensive_model)
+#apa.reg.table(orfcs_comprehensive_model,paste0(data_dir , "/apa_out.doc"))
+
+```
+
+```{r}
+apa_HINTS <- apa.reg.table(HINTS_comprehensive_model)
+```
+
+
+
+```{r}
+table(hines_cycle5$Education)
+
+# orfcs_dataset$HHIncome_z <- zscore(orfcs_dataset$aSES_02_z)
+hines_cycle5$HHInc_r_z <- zscore(hines_cycle5$HHInc_r)
+HINTS_agghealth_comprehensive_model <- lm(MedConditionsAggregate~Age_c+I(Age_c^2)+Gender3C+RacePP
+    +EducationalAchievement
+   +HINTSIsRural_i
+   +Fruit_vegetables_z
+   +filename
+   +HHInc_r_z,hines_cycle5)
+library(apaTables)
+
+HINTS_agghealth_model_df <- apa.reg.table(HINTS_agghealth_comprehensive_model)
+#apa.reg.table(orfcs_comprehensive_model,paste0(data_dir , "/apa_out.doc"))
+
+```
+
+
+### Follow-up focus on fruit and vege
+
+We _cannot_ replicate the base rural-urban difference when looking at fruit and vege consumption:
+```{r}
+predict_bmi_rural <- lm(FFQ_fruit_vegetables_z~RuralZIP+
+                            #MESA_healthyfoodavailability+MESA_safetyfromcrime
+                            PSS_z+
+                            DEMO_Age_c+I(DEMO_Age_c^2)+Gender3C+RaceC2,
+                        orfcs_dataset)
+summary(predict_bmi_rural)
+```
+
+```{r}
+
+predict_bmi_rural <- lm(FFQ_fruit_vegetables_z~RuralZIP+
+                            #MESA_healthyfoodavailability+MESA_safetyfromcrime
+                            PSS_z+
+                            DEMO_Age_c+I(DEMO_Age_c^2)+Gender3C+RaceC2,
+                        orfcs_dataset)
+summary(predict_bmi_rural)
+
+predict_bmi_rural <- lm(FFQ_fruits_ln_z~RuralZIP+
+                            #MESA_healthyfoodavailability+MESA_safetyfromcrime
+                            PSS_z+
+                            DEMO_Age_c+I(DEMO_Age_c^2)+Gender3C+RaceC2,
+                        orfcs_dataset)
+summary(predict_bmi_rural)
+
+
+predict_bmi_rural <- lm(FFQ_vegetables_ln_z~RuralZIP+
+                            #MESA_healthyfoodavailability+MESA_safetyfromcrime
+                            PSS_z+
+                            DEMO_Age_c+I(DEMO_Age_c^2)+Gender3C+RaceC2,
+                        orfcs_dataset)
+summary(predict_bmi_rural)
+
+
+
+predict_bmi_rural <- lm(FFQ_cancer_promoting~RuralZIP+
+                            #MESA_healthyfoodavailability+MESA_safetyfromcrime
+                            PSS_z+
+                            DEMO_Age_c+I(DEMO_Age_c^2)+Gender3C+RaceC2,
+                        orfcs_dataset)
+summary(predict_bmi_rural)
+
+predict_bmi_rural <- lm(FFQ_cancer_preventing~RuralZIP+
+                            #MESA_healthyfoodavailability+MESA_safetyfromcrime
+                            PSS_z+
+                            DEMO_Age_c+I(DEMO_Age_c^2)+Gender3C+RaceC2,
+                        orfcs_dataset)
+summary(predict_bmi_rural)
+
+```
+
+
+
+```{r mediation1_food_availability}
+set.seed(6472426)
+library(mediation)
+
+data_to_measure <- orfcs_dataset %>% filter(Gender3C %in% c("Male","Female"))
+
+#Rurality -> Income -> BMI
+
+#data_to_measure$FFQ_fruit_vegetables_z_flip<- (-data_to_measure$FFQ_fruit_vegetables_z)
+mb <- lm(MESA_healthyfoodavailability_z~RuralZIP_i+Gender3C+DEMO_Age_c+RaceC2+PSS_z,data_to_measure)
+mc <- lm(FFQ_fruit_vegetables_z~RuralZIP_i+Gender3C+DEMO_Age_c+RaceC2+MESA_healthyfoodavailability_z+PSS_z,data_to_measure)
+
+mediate_result <- mediate(mb,mc,sims=boot_times, boot=TRUE,boot.ci.type = "bca", treat="RuralZIP_i",mediator="MESA_healthyfoodavailability_z")
+summary(mediate_result)
+summary(mb)
+summary(mc)
+```
+
+```{r}
+
+
+# orfcs_dataset$HHIncome_z <- zscore(orfcs_dataset$aSES_02_z)
+
+HINTS_comprehensive_model <- lm(Fruit_vegetables_z~Age_c+I(Age_c^2)+Gender3C+RacePP
+   +HINTSIsRural_i
+   +filename,hines_cycle5)
+library(apaTables)
+
+summary(HINTS_comprehensive_model)
+
+#apa.reg.table(orfcs_comprehensive_model,paste0(data_dir , "/apa_out.doc"))
+
+```
+
+
+
+
+```{r mediation1}
+# set.seed(6472426)
+# 
+# 
+# library(mediation)
+# 
+# data_to_measure <- hines_cycle5 %>% dplyr::filter(!is.na(BMI) & Gender3C %in% c("Male","Female"))
+# 
+# #Rurality -> Income -> BMI
+# 
+# #data_to_measure$FFQ_fruit_vegetables_z_flip<- (-data_to_measure$FFQ_fruit_vegetables_z)
+# mb <- lm(MESA_healthyfoodavailability_z~HINTSIsRural_i+Gender3C+Age_c+RacePP+PSS_z,data_to_measure)
+# mc <- lm(FFQ_fruit_vegetables_z~HINTSIsRural_i+Gender3C+Age_c+RacePP+MESA_healthyfoodavailability_z+PSS_z,data_to_measure)
+# 
+# mediate_result <- mediate(mb,mc,sims=boot_times, boot=TRUE,boot.ci.type = "bca", treat="HINTSIsRural_i",mediator="MESA_healthyfoodavailability_z")
+# summary(mediate_result)
+# summary(mb)
+# summary(mc)
+```
+
+

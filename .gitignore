@@ -1,0 +1,7 @@
+*.nb.html
+.Rdata
+.RData
+*.Rdata
+.Rhistory
+.DS_Store
+.gitignore.swp

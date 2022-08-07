@@ -1,0 +1,166 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+source("HINTS_preprocessing.R")
+hines_cycle5 <-get_hints5()
+```
+
+```{r}
+library(mediation)
+#model is:
+data_to_measure <- hines_cycle5 %>% 
+  filter( !is.na(HHInc_r) & !is.na(BMI))
+
+
+#Rurality -> Income -> BMI
+mb <- lm(HHInc_r~Age_c+I(Age_c^2)+Gender3C+HINESIsRural+RacePreprocessed+filename+Fruit_z+Vegetables_z,data_to_measure)
+mc <- lm(BMI~Age_c+I(Age_c^2)+Gender3C+HINESIsRural+RacePreprocessed+filename+Fruit_z+Vegetables_z+HHInc_r,data_to_measure)
+
+income_mediation <- mediate(mb,mc,sims=100,treat="HINESIsRural",mediator="HHInc_r")
+summary(income_mediation)
+plot(income_mediation)
+#lm(HHInc_r~BMIdata_to_measure$,data_to_measure$)
+cor.test(data_to_measure$HHInc_r,as.numeric(data_to_measure$HINESIsRural))
+
+summary(mc)
+
+```
+
+So, controlling for food consumption, age, gender, and race, household income is predictive of BMI, and mediates the relationship between rurality and BMI.
+
+We previously tested diet as a mediator--do either of the the diet measures we have here mediate the relationship between BMI and rurality?
+
+
+```{r}
+
+
+# mb <- lm(mediator~treat+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical,data_to_measure)
+# mc <- lm(predicted~treat+Gender3C+DEMO_Age_c+I(DEMO_Age_c^2)+RaceCategorical+mediator,data_to_measure)
+# 
+# mediate_result <- mediate(mb,mc,sims=100,treat="RuralZIP",mediator="MESA_healthyfoodavailability")
+# summary(mediate_result)
+
+data_to_measure <- hines_cycle5 %>% 
+  filter( !is.na(HHInc_r) & !is.na(BMI) & !is.na(Fruit_z) & !is.na(Vegetables_z))
+
+
+#Rurality -> Income -> BMI
+mb <- lm(Fruit_z~Age_c+I(Age_c^2)+Gender3C+HINESIsRural+RacePreprocessed+filename+HHInc_r,data_to_measure)
+mc <- lm(BMI~Age_c+I(Age_c^2)+Gender3C+HINESIsRural+RacePreprocessed+filename+HHInc_r+Fruit_z,data_to_measure)
+
+fruit_mediation <- mediate(mb,mc,sims=100,treat="HINESIsRural",mediator="Fruit_z")
+summary(fruit_mediation)
+
+summary(mc)
+
+```
+
+They do--interesting. This complicates the story a little bit. In the HINTS dataset, fruit consumption _does_ mediate the relationship between BMI and rurality. What about vegetables?
+
+
+```{r}
+
+
+data_to_measure <- hines_cycle5 %>% 
+  filter( !is.na(HHInc_r) & !is.na(BMI) & !is.na(Fruit_z) & !is.na(Vegetables_z))
+
+
+#Rurality -> Income -> BMI
+mb <- lm(Vegetables_z~Age_c+I(Age_c^2)+Gender3C+HINESIsRural+RacePreprocessed+filename+HHInc_r,data_to_measure)
+mc <- lm(BMI~Age_c+I(Age_c^2)+Gender3C+HINESIsRural+RacePreprocessed+filename+HHInc_r+Vegetables_z,data_to_measure)
+
+vegetable_mediation <- mediate(mb,mc,sims=100,treat="HINESIsRural",mediator="Vegetables_z")
+summary(vegetable_mediation)
+
+summary(mc)
+
+```
+
+Vegetable consumption does NOT mediate the relationship between rurality and BMI. But fruit does. We can reproduce this by looking at just FFQ_fruit in the Oregon dataset. This doesn't replicate in the Oregon dataset, unfortunately.
+
+
+What about if we cut off only measuring BMIs of 26 or more?
+
+
+
+```{r}
+library(mediation)
+#model is:
+data_to_measure <- hines_cycle5 %>% 
+  filter( !is.na(HHInc_r) & !is.na(BMI) & BMI>=26.0)
+
+
+#Rurality -> Income -> BMI
+mb <- lm(HHInc_r~Age_c+I(Age_c^2)+Gender3C+HINESIsRural+RacePreprocessed+filename+Fruit_z+Vegetables_z,data_to_measure)
+mc <- lm(BMI~Age_c+I(Age_c^2)+Gender3C+HINESIsRural+RacePreprocessed+filename+Fruit_z+Vegetables_z+HHInc_r,data_to_measure)
+
+income_mediation <- mediate(mb,mc,sims=100,treat="HINESIsRural",mediator="HHInc_r")
+summary(income_mediation)
+
+summary(mc)
+
+```
+
+
+```{r}
+
+
+data_to_measure <- hines_cycle5 %>% 
+  filter( !is.na(HHInc_r) & !is.na(BMI) & !is.na(Fruit_z) & !is.na(Vegetables_z) & BMI>=26.0)
+
+
+#Rurality -> Income -> BMI
+mb <- lm(Fruit_z~Age_c+I(Age_c^2)+Gender3C+HINESIsRural+RacePreprocessed+filename+HHInc_r,data_to_measure)
+mc <- lm(BMI~Age_c+I(Age_c^2)+Gender3C+HINESIsRural+RacePreprocessed+filename+HHInc_r+Fruit_z,data_to_measure)
+
+fruit_mediation <- mediate(mb,mc,sims=100,treat="HINESIsRural",mediator="Fruit_z")
+summary(fruit_mediation)
+
+summary(mc)
+
+```
+
+
+
+
+```{r}
+corrplot::corrplot(
+  cor(hines_cycle5 %>% select("HINESIsRural","HHInc_r","Fruit_z","BMI" #,"FFQ_vegetables_ln_z","cancer_promoting_minus_preventing_FFQ"
+                                   ),use = "pairwise.complete.obs"),
+  method="number",
+  type="upper",
+  diag=FALSE,
+  tl.srt=45,
+  insig="blank",col="black"
+)
+
+
+```
+What about education?
+
+```{r}
+
+summary(lm(
+  BMI~Age_c+I(Age_c^2)+Gender3C+HINESIsRural+RacePreprocessed+filename+HHInc_r+Fruit_z+Education,data_to_measure))
+data_to_measure$EducB
+
+summary(lm(
+  BMI~Age_c+I(Age_c^2)+Gender3C+HINESIsRural+RacePreprocessed+filename+HHInc_r+Fruit_z+Education*Age_c,data_to_measure))
+
+summary(lm(
+  BMI~Age_c+I(Age_c^2)+Gender3C+HINESIsRural+RacePreprocessed+filename+HHInc_r+Fruit_z+EducA,data_to_measure))
+
+summary(lm(
+  BMI~Age_c+I(Age_c^2)+Gender3C+HINESIsRural+RacePreprocessed+filename+HHInc_r+Fruit_z+EducB,data_to_measure))
+
+```
+
+
+

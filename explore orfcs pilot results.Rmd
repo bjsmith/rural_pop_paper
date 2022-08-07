@@ -1,0 +1,123 @@
+---
+title: "explore_orfcs_pilot_results"
+author: "Ben Smith"
+date: "10/19/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r}
+library(dplyr)
+```
+
+
+we are primarily interested in ZIP code.
+
+Get the results from pilot 1
+
+```{r}
+data_dir <- "/Users/benjaminsmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/"
+
+
+
+pilot_1 <- readr::read_csv(paste0(data_dir, "cloudresearch_survey_results/Oregon Rural Food Consumption Survey Bespoke CR_October 18, 2021_11.34_pilot1.csv"))
+pilot_2 <- readr::read_csv(paste0(data_dir, "cloudresearch_survey_results/ORFCS Bespoke CR2_October 18, 2021_11.31_pilot2.csv"))
+
+complete_1 <- readr::read_csv(paste0(data_dir, "cloudresearch_survey_results/ORFCS Bespoke CR2_November 2, 2021_11.47.csv"))
+```
+
+The ZIP Code data is best used with the DEMO_6 field. Participants entered this one more than they did the one in address. But we should also check to see how many filled out address information.
+
+```{r}
+
+cols_to_extract <- c("aid","WEIGHT","HEIGHT_1","LocationLatitude","geo_lat","LocationLongitude","geo_lng", "AddressNum_1", "Address_1","Address_2", "Address_3","DEMO_6")
+pilot_1_mergedata <- pilot_1[,cols_to_extract]
+pilot_1_mergedata$survey <- "pilot1"
+pilot_2_mergedata <- pilot_2[,cols_to_extract]
+pilot_2_mergedata$survey <- "pilot2"
+
+complete_1_mergedata <- complete_1[,cols_to_extract]
+complete_1_mergedata$survey <- "complete1"
+
+pilot_mergedata <- rbind(pilot_1_mergedata,pilot_2_mergedata) %>% rbind(complete_1_mergedata)
+
+pilot_mergedata$PptZIPCode<-pilot_mergedata$DEMO_6
+```
+
+Based on `match_ppt_to_ruca_with_zip_code.Rmd`.
+
+
+Now we want to get the RUCA codes.
+
+```{r}
+ruca2010_zip_code_descriptions <- readxl::read_xlsx(paste0(data_dir , "RUCA2010zipcode.xlsx" ),sheet = 1)
+ruca2010_zip_codes <- readxl::read_xlsx(paste0(data_dir , "RUCA2010zipcode.xlsx" ),sheet = "Data")
+ruca2010_zip_codes_details <- readxl::read_xlsx(paste0(data_dir , "RUCA2010zipcode.xlsx" ),sheet = "RUCA code description")
+ruca1010_zip_code_ruca_description_table <- readr::read_csv(paste0(data_dir,"RUCA2010zipcode_primary_code_key.csv"))
+```
+
+Now, match the participant ZIP Codes to the RUCA 2010
+
+```{r}
+ppts_with_zip_ruca <- merge(pilot_mergedata,ruca2010_zip_codes,by.x="PptZIPCode",by.y="ZIP_CODE",all.x=TRUE,all.y=FALSE)
+ppts_with_zip_ruca <- merge(ppts_with_zip_ruca,ruca1010_zip_code_ruca_description_table, by.x="RUCA1",by.y="PrimaryCode",all.x=TRUE,all.y=FALSE)
+#View(ppts_with_zip_ruca)
+
+
+
+```
+
+The research objectives of the [grant](https://grants.nih.gov/grants/guide/rfa-files/RFA-CA-20-051.html) say:
+
+> The purpose of this FOA is to solicit applications to develop, adapt, and test individual-, community- or multilevel interventions to address modifiable risk factors for cancer in rural populations, as defined by USDA Rural-Urban Continuum Codes (RUCC) 4-9, Rural-Urban Commuting Area (RUCA) codes 4-10, or Frontier and Remote (FAR) areas level 4.
+
+So which subjects do we have at levels 4-10? Based on ZIP Code, we have
+
+```{r}
+ppts_with_zip_ruca$ClassifiedRural <- ppts_with_zip_ruca$RUCA1>=4
+```
+
+```{r}
+ruca1010_zip_code_ruca_description_table
+```
+```{r}
+table(ppts_with_zip_ruca$ClassifiedRural)
+table(is.na(ppts_with_zip_ruca$ClassifiedRural))
+```
+
+
+```{r}
+table(ppts_with_zip_ruca$Description,ppts_with_zip_ruca$ClassifiedRural)
+
+```
+
+
+HOw complete is the data?
+
+```{r}
+ppts_with_zip_ruca$provided_address <- !is.na(ppts_with_zip_ruca$Address_1) & !is.na(ppts_with_zip_ruca$AddressNum_1) & !is.na(ppts_with_zip_ruca$Address_2)
+ppts_with_zip_ruca$provided_latlng <- !is.na(ppts_with_zip_ruca$geo_lat)
+ppts_with_zip_ruca$provided_address_or_latlng <- ppts_with_zip_ruca$provided_address | ppts_with_zip_ruca$provided_latlng
+
+table(ppts_with_zip_ruca$provided_address_or_latlng,ppts_with_zip_ruca$survey)
+
+```
+
+
+```{r}
+table(ppts_with_zip_ruca$ClassifiedRural,ppts_with_zip_ruca$survey)
+```
+
+
+```{r}
+table(ppts_with_zip_ruca$ClassifiedRural,ppts_with_zip_ruca$provided_address_or_latlng)
+```
+
+```{r}
+chisq.test(ppts_with_zip_ruca$ClassifiedRural,ppts_with_zip_ruca$provided_address_or_latlng)
+```
+
+
+

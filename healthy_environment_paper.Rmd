@@ -1,0 +1,288 @@
+---
+title: "Healthy environments are associated with lower BMIs controlling for race, gender, and age"
+output:
+  html_document:
+    df_print: paged
+---
+
+This notebook tracks the healthy environment paper where we present a pre-registered finding that having a healthier food environment is associated with lower BMIs, controlling for race, gender, and age.
+
+We'll work across two datasets here: DEV and ORFCS.
+
+First, we need to do the pre-registered finding exactly as presented. It was for the ORFCS, so we need to load that first.
+
+```{r}
+library(stringr)
+library(rstatix)
+```
+
+```{r}
+library(magrittr)
+library(dplyr)
+
+
+
+data_dir <- "/Users/benjaminsmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/"
+
+#preprocessed_data_filepath <- paste0(data_dir,"cloudresearch_survey_results/orfcs_preprocessed2_anon_by_subj.csv")
+preprocessed_data_filepath <- paste0(config::get("orfcs_shareable_folder"),"oregon_dataset_anon.csv")
+library(readr)
+library(ggplot2)
+library(GGally)
+preprocessed_data <- readr::read_csv(preprocessed_data_filepath)
+
+#don't need to include this attention check here because it's now been added to the pre-processing.
+# rows_to_remove <- ((preprocessed_data_raw$EDM_forwardscore<2 & preprocessed_data_raw$EDM_reversescored>4) |
+#   (preprocessed_data_raw$EDM_forwardscore>=4.5 & preprocessed_data_raw$EDM_reversescored<2))
+# rows_to_remove[is.na(rows_to_remove)]<-FALSE
+# print(sum(rows_to_remove,na.rm=TRUE))
+# sub_ids_to_remove <- preprocessed_data_raw[rows_to_remove,"SID"]
+# preprocessed_data <- preprocessed_data_raw %>% filter((SID %in% unlist(sub_ids_to_remove))==FALSE)
+
+# preprocessed_data$RaceCategorical<-factor(preprocessed_data$RaceCategorical,levels=unique(preprocessed_data$RaceCategorical))
+
+# preprocessed_data$RuralZIP_i <- as.numeric(preprocessed_data$RuralZIP)
+# preprocessed_data$RaceC2 <- as.character(preprocessed_data$RaceCategorical)
+# preprocessed_data$RaceC2[preprocessed_data$RaceC2=="RaceNotReported"] <- "OtherRaceRaceNotReported"
+# preprocessed_data$RaceC2[preprocessed_data$RaceC2=="OtherRace"] <- "OtherRaceRaceNotReported"
+# preprocessed_data$RaceC2 <-factor(preprocessed_data$RaceC2,levels=names(sort(table(preprocessed_data$RaceC2),decreasing=TRUE)))
+
+#need to remove this one data point for data quality issue.
+# preprocessed_data[!is.na(preprocessed_data$WEIGHT) & preprocessed_data$WEIGHT>500,c("WEIGHT","WEIGHT_kg","BMI")] <- NA
+# rm(preprocessed_data_raw)
+orfcs_dataset<-preprocessed_data
+```
+
+```{r}
+#put self-report items in z-score. It wont' change the estimate but it will make it easier to interpret
+zscore <- function(x){
+  return((x-mean(x,na.rm=TRUE))/sd(x,na.rm=TRUE))
+}
+orfcs_dataset %<>% 
+  mutate(
+    MESA_healthyfoodavailability_z =zscore(MESA_healthyfoodavailability),
+    MESA_safetyfromcrime_z =zscore(MESA_safetyfromcrime),
+    PSS_z = zscore(PSS_sum),
+    cancer_promoting_minus_preventing_FFQ_z = zscore(cancer_promoting_minus_preventing_FFQ),
+    DEMO_Age_c = DEMO_Age - mean(DEMO_Age,na.rm=TRUE) #center age, but do not z-score it.
+  )
+```
+
+```{r}
+#https://www.rdocumentation.org/packages/mediation/versions/4.5.0/topics/mediate
+library(mediation)
+boot_times = 100 # set this to 10000 for final analysis, and 100 for setting up
+```
+
+## Pre-registered questions
+
+We have two pre-registered analyses testing today.
+
+> To measure the effect of community on eating behavior and health, we will use two linear models to predict (1) eating behavior and (2) health outcome from
+> (a) Community healthy food environment
+> (b) Community safety
+> (c) self-report confounding variables PSS-4
+> (d) demographic confounders relating to age and race
+
+There are other pre-registrations, but we'll first deal with pre-registrations that relate specifically to community healthy food environment and do not examine rurality, which we will examine separately.
+
+So let's get those two linear models. We actually have run them in a few different places already, so it's easy to reproduce them here. For these variables, they are very specifically define:
+
+1. Eating behavior is measured using the FFQ scale with balance of "cancer preventing" foods minus "cancer promoting" foods.
+
+2. Health outcome is measured with BMI calculated from self-reported weight and height.
+
+3. "Community safety environment" will be measured using 3-question MESA Community Safety measure.
+
+4. "Healthier food environment" will be measured by a 6-point MESA Healthy Food Environment scale.
+
+So we are locked into a fairly specific analysis plan here.
+
+
+
+
+```{r}
+
+
+predict_bmi <- lm(BMI~
+                    MESA_healthyfoodavailability_z+MESA_safetyfromcrime_z+PSS_z+
+                    DEMO_Age_c+Gender3C+RaceC2,
+                  orfcs_dataset)
+summary(predict_bmi)
+confint(predict_bmi)
+
+predict_ffq <- lm(cancer_promoting_minus_preventing_FFQ_z~
+                    MESA_healthyfoodavailability_z+MESA_safetyfromcrime_z+PSS_z+
+                    DEMO_Age_c+Gender3C+RaceC2,
+                  orfcs_dataset)
+summary(predict_ffq)
+confint(predict_ffq)
+```
+
+In each of these analyses, MESA_healthyfoodavailability is important, and is related to lower BMIs (b=-0.7, p<0.05) and FFQ (b=-0.07, p<0.001). That is, for every 1 SD in healthy food availability, we get -0.7 points on the BMI scale and -0.13 points on the z-scored Food Frequency Questionnaire.
+
+We can also measures these while controlling for age as a quadratic variable:
+
+
+```{r}
+
+
+predict_bmi <- lm(BMI~
+                    MESA_healthyfoodavailability_z+MESA_safetyfromcrime_z+PSS_z+
+                    DEMO_Age_c+I(DEMO_Age_c^2)+Gender3C+RaceC2,
+                  orfcs_dataset)
+summary(predict_bmi)
+confint(predict_bmi)
+
+predict_ffq <- lm(cancer_promoting_minus_preventing_FFQ_z~
+                    MESA_healthyfoodavailability_z+MESA_safetyfromcrime_z+PSS_z+
+                    DEMO_Age_c+I(DEMO_Age_c^2)+Gender3C+RaceC2,
+                  orfcs_dataset)
+summary(predict_ffq)
+confint(predict_ffq)
+```
+
+## Exploring overweight-obese subset
+
+<!--Because confounder effects are not well captured here, we explored post-hoc effects to try to identify ways we could explain more variance using data available.-->
+
+We were interested in subjects with BMIs over 25, because some research suggests no difference in health risk for BMIs under 30. Exploring BMIs over 25 allows us to essentially compare overweight with obese, where there is a difference in health risk.
+
+
+
+
+```{r}
+
+
+predict_bmi25_bmi <- lm(BMI~
+                    MESA_healthyfoodavailability_z+MESA_safetyfromcrime_z+PSS_z+
+                    DEMO_Age_c+Gender3C+RaceC2,
+                  orfcs_dataset %>% filter(BMI>25.0))
+summary(predict_bmi25_bmi)
+
+predict_bmi25_ffq <- lm(cancer_promoting_minus_preventing_FFQ_z~
+                    MESA_healthyfoodavailability_z+MESA_safetyfromcrime_z+PSS_z+
+                    DEMO_Age_c+Gender3C+RaceC2,
+                  orfcs_dataset %>% filter(BMI>25.0))
+summary(predict_bmi25_ffq)
+```
+
+
+When considering BMIs over 25, an effect of healthy food availability on BMI became much clearer (p=0.001). The effect of FFQ actually became less clear.
+
+## Effect of FFQ
+
+Having established that FFQ is related to healthy food availability, we wanted to examine whether FFQ is related to BMI. That is, does food healthiness consumption actually influence BMI?
+
+
+```{r}
+
+
+predict_bmi_from_ffq <- lm(BMI~
+                    cancer_promoting_minus_preventing_FFQ_z+
+                    DEMO_Age_c+Gender3C+RaceC2,
+                  orfcs_dataset)
+summary(predict_bmi_from_ffq)
+
+```
+
+We find a significant (b=1.08, p<0.001) relationship between FFQ and BMI, such that 1 SD higher on the FFQ distribution is associated with a 1.1 increase in BMI.
+
+## Mediation
+
+Next, we wanted to establish whether food frequency mediates the relationship between BMI and healthy food availability.
+
+
+
+```{r}
+#for thsi analysis, we exclude subjects not Male or Female because they are very rare, 
+#and sometimes this can cause an error with bootstrapping 
+
+data_to_measure <- orfcs_dataset %>% filter(!is.na(BMI) & Gender3C %in% c("Female","Male"))
+
+
+mb <- lm(cancer_promoting_minus_preventing_FFQ~MESA_healthyfoodavailability+Gender3C+DEMO_Age_c+RaceC2,data_to_measure)
+mc <- lm(BMI~MESA_healthyfoodavailability+Gender3C+DEMO_Age_c+RaceC2+cancer_promoting_minus_preventing_FFQ,data_to_measure)
+
+mediate_result <- mediate(mb,mc,boot=TRUE,sims=boot_times,treat="MESA_healthyfoodavailability",mediator="cancer_promoting_minus_preventing_FFQ")
+summary(mediate_result)
+summary(mc)
+
+
+```
+
+We find that there is a significant mediation effect, ACME=-0.14, p<0.001, of food consumption on the relationship between BMI and healthy food availability.
+
+We can repeat the mediation effect for the over-25 BMI subjects:
+
+
+
+
+```{r}
+#for thsi analysis, we exclude subjects not Male or Female because they are very rare, 
+#and sometimes this can cause an error with bootstrapping 
+
+data_to_measure <- orfcs_dataset %>% filter(!is.na(BMI) & Gender3C %in% c("Female","Male") & BMI>25)
+
+
+mb <- lm(cancer_promoting_minus_preventing_FFQ~MESA_healthyfoodavailability+Gender3C+DEMO_Age_c+RaceC2,data_to_measure)
+mc <- lm(BMI~MESA_healthyfoodavailability+Gender3C+DEMO_Age_c+RaceC2+cancer_promoting_minus_preventing_FFQ,data_to_measure)
+
+mediate_result <- mediate(mb,mc,boot=TRUE,sims=boot_times,treat="MESA_healthyfoodavailability",mediator="cancer_promoting_minus_preventing_FFQ")
+summary(mediate_result)
+summary(mb)
+summary(mc)
+
+
+```
+
+
+Mediation effect doesn't hold for this group...
+
+
+## Examining a different dataset
+
+We examined a second dataset to see if the mediation effect held in this dataset would hold in another one.
+
+(need to import the DEV dataset, then re-rerun the mediation analysis)
+
+### Load that DEV dataset
+
+
+```{r}
+
+dropbox_file_dir = "~/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/"
+
+source("../dev_load_functions.R")
+
+dev_data_by_ppt <- get_complete_data_by_ppt(dropbox_file_dir)
+```
+
+
+```{r}
+dev_data_by_ppt %<>% 
+  mutate(
+    MESA_healthyfoodavailability_z =zscore(MESA_healthyfoodavailability),
+    MESA_safetyfromcrime_z =zscore(MESA_safetyfromcrime),
+    cancer_promoting_minus_preventing_FFQ_z = zscore(cancer_promoting_minus_preventing_FFQ),
+    age365_c = age365 - mean(age365,na.rm=TRUE) #center age, but do not z-score it.
+  )
+```
+
+### Right, now; what did we want to get out of the DEV dataset?
+
+```{r}
+predict_bmi <- lm(bmi~cancer_promoting_minus_preventing_FFQ_z+
+                    age365_c+birthsex_factor+RaceC2,
+                  dev_data_by_ppt)
+summary(predict_bmi)
+
+predict_bf_1 <- lm(bf_1~cancer_promoting_minus_preventing_FFQ_z+
+                    age365_c+birthsex_factor+RaceC2,
+                  dev_data_by_ppt)
+summary(predict_bf_1)
+
+```
+
+While we can't confirm the relationship between BMI and FFQ in the DEV dataset, we do see a relationship between Body Fat Percentage and FFQ.
+

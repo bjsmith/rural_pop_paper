@@ -1,0 +1,594 @@
+---
+title: "Scoring Qualtrics data with scorequaltrics"
+author: "Dani Cosme"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    code_folding: show
+    df_print: paged
+    highlight: tango
+    theme: united
+    toc: yes
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+  pdf_document:
+    toc: yes
+  md_document:
+    variant: markdown_github
+---
+```{r}
+library(stringr)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(error = FALSE, warning = FALSE, message = FALSE)
+```
+
+This script is a template workflow for scoring Qualtrics data using the [`scorequaltrics`](https://github.com/jflournoy/qualtrics) package built by [John Flournoy](https://github.com/jflournoy) and is a pared down version of the tutorial he created for the TDS study.
+
+
+## Load packages
+
+
+
+```{r}
+#devtools::install_github('jflournoy/qualtrics')
+```
+
+
+
+
+```{r}
+if (!require(tidyverse)) {
+  install.packages('tidyverse')
+}
+
+if (!require(knitr)) {
+  install.packages('knitr')
+}
+
+if (!require(devtools)) {
+  install.packages('devtools')
+}
+
+if (!require(scorequaltrics)) {
+  devtools::install_github('dcosme/qualtrics', ref = "dev/enhance")
+}
+
+if (!require(ggcorrplot)) {
+  install.packages('ggcorrplot')
+}
+```
+
+## Define variables and paths
+* `cred_file_location` = path to your Qualtrics credential file. You'll need to generate this via Qualtrics using the instructions above.
+* `keep_columns` = subject ID column name and any other columns in Qualtrics survey you want to keep in wide format (all others will be gathered into a key-value pair); can be a regular expression
+* `survey_name_filter` = regular expression to select surveys
+* `sid_pattern` = regular expression for participant IDs
+* `exclude_sid` = regular expression for participant IDs to exclude (e.g. test responses)
+* `identifiable_data` = identifiable data you do not want to include in the dataframe
+* `output_file_dir` = output file directory
+* `rubric_dir` = scoring rubric directory
+
+```{r}
+cred_file_location = '~/qualtrics_credentials.yaml'
+keep_columns = '(Login|ResponseId|Finished|SID)'
+survey_name_filter = 'DEV .* (Survey|Demographics)'
+sid_pattern = 'DEV[0-9]{3}$'
+exclude_sid = '^99|DEV999|DEV000|DEV998|DEV737' # subject IDs to exclude
+identifiable_data = c('IPAddress', "RecipientEmail", "RecipientLastName", "RecipientFirstName",
+                      "LocationLatitude", "LocationLongitude") # exclude when printing duplicates
+#output_file_dir = '/Users/benjaminsmith/Google Drive/oregon/grant-writing-workshop/files/data/scoring_output'
+output_file_dir = "~/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/"
+#rubric_dir = '/Users/benjaminsmith/Google Drive/oregon/grant-writing-workshop/files/data/DEV_scoring_rubrics'
+
+# output_file_dir = '/Users/benjaminsmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/'
+rubric_dir = '/Users/benjaminsmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/DEV_scoring_rubrics'
+
+
+#should replace this by the Dropbox directory
+```
+
+## Access qualtrics data
+Filter available surveys based on the filter specified above.
+
+```{r}
+#install.packages("scorequaltrics")
+# load credential file
+#cred_file_location <- "~/Google Drive/oregon/bernice_credentials.yaml"
+credentials = scorequaltrics::creds_from_file(cred_file_location)
+
+# filter
+surveysAvail = scorequaltrics::get_surveys(credentials)
+surveysFiltered = filter(surveysAvail, grepl(survey_name_filter, SurveyName))
+
+knitr::kable(arrange(select(surveysFiltered, SurveyName), SurveyName))
+```
+
+## Cleaning and scoring data
+### Get survey data
+The `get_survey_data` function pulls the data from the surveys specified in `surveysFiltered` and reshapes into the long format. Because the example data also includes some identifying information, we also want to filter those items out of our dataframe.
+
+
+
+```{r getsurveydata, results="hide"}
+# get data
+surveys_long = scorequaltrics::get_survey_data(surveysFiltered,
+                                               pid_col = keep_columns) %>%
+               filter(!item %in% identifiable_data) %>% #filter out identifiable data
+              mutate(SID=coalesce(SID_1,Login)) %>% #combine the SID_1 and Login cols
+              select(-SID_1,-Login) #remove them from the old columns
+
+# print first 10 rows
+head(select(surveys_long, -ResponseId), 10)
+```
+
+### Load scoring rubrics
+To automatically score the surveys, scoring rubrics with the following format must be provided:
+
+Required columns
+
+* `scale name` = name of the scale
+* `column name` = item name used in Qualtrics
+* `reverse` = reverse scoring flag (1 = yes, 0 = no)
+* `min` = minimum value for numeric items
+* `max` = maximum value for numeric items
+* `transform` = transformation function; use 0 for all items as we're not transforming the data during scoring
+
+User-generated column names
+
+* mean
+  * use this column name for the average of scores across all items in the questionnaire
+* sum
+  * use this column name for the sum of scores across all items in the questionnaire
+* sub-facet names
+  * if a questionnaire has sub-facets, create a separate column for each sub-facet
+  * name each sub-facet based on the sub-facet name in the survey using spaces between words
+  * if the sub-facet name is very long, pick two or three words that adequately describe the facet
+
+Item values in user-created columns
+
+* mean = use this item in the column mean calculation
+* sum = use this item in the column sum calculation
+* 1 = single numeric values
+* I = non-numerical values (i.e., text)
+* blank = ignore this item in the column calculation
+
+```{r examplerubric}
+#read.csv('examplerubric.csv', stringsAsFactors = FALSE, check.names = FALSE)
+```
+
+
+Scoring rubrics should exist in `rubric_    dir` and be named according to the following convention: `[measure]_scoring_rubric.csv`
+
+```{r}
+# specify rubric paths
+scoring_rubrics = data.frame(file = dir(file.path(rubric_dir), 
+                                        pattern = '.*scoring_rubric.*.csv',
+                                        full.names = TRUE))
+
+# read in rubrics
+scoring_data_long = scorequaltrics::get_rubrics(scoring_rubrics,
+                                                type = 'scoring')
+# print the first 10 rows
+head(scoring_data_long[, -1], 10)
+```
+
+### Cleaning
+* modify IPAQ data (it's not in standard form)
+* remove responses after the cut-off date
+* exclude non-sub responses
+* convert missing values to NA
+* duplicates
+
+
+IPAQ data
+
+```{r}
+ipaq_item_pairs <- list(c("IPAQ_1","IPAQ_2_1_TEXT"),
+                        c("IPAQ_3","IPAQ_4_1_TEXT"),
+                        c("IPAQ_5","IPAQ_6_1_TEXT"))
+
+responses <- unique(surveys_long$ResponseId)
+x=0
+extra_rows <- list()
+for (resp in responses){
+  x=x+1
+  for (iip in ipaq_item_pairs){
+    days <- surveys_long[surveys_long$ResponseId==resp & surveys_long$item==iip[[1]],]
+    minutes <- surveys_long[surveys_long$ResponseId==resp & surveys_long$item==iip[[2]],]
+    if(nrow(days)==1){
+      if(!is.na(days$value)){
+        #print(days)
+        if(days$value=="0"){
+          if(nrow(minutes)>0){
+              if (is.na(minutes$value)){
+                minutes$value<-0
+                cat("*")
+              }else{
+                #this row exists and has a value, do nothing.
+              }
+          }else{#there is no existing 'minutes' row
+            #copy the days row
+            new_zero_row <- surveys_long[surveys_long$ResponseId==resp & surveys_long$item==iip[[1]],]
+            #modify it to look like a minutes row
+            new_zero_row$item <- iip[[2]]
+            #set its value
+            new_zero_row$value <- "0"
+            #add to the append list
+            extra_rows <- c(extra_rows,list(new_zero_row))
+            cat("+")
+          }
+        }          
+      }
+    }
+
+    
+    #if(surveys_long[surveys_long$ResponseId==resp & surveys_long$item==iip[[1]]])
+  }
+  if((x%%10)==0){
+    cat(". ")
+  }
+  
+}
+
+extra_row_table <-do.call(rbind,extra_rows)
+
+
+
+```
+
+```{r}
+surveys_long <- rbind(surveys_long %>% ungroup(),extra_row_table)
+```
+
+
+Remove items that are after the cut-off date
+
+
+
+```{r}
+survey_timing <- (
+  surveys_long %>% 
+     filter(item=="StartDate") %>% 
+     mutate(startdatetime= lubridate::as_datetime(as.numeric(value))) 
+   %>% select(ResponseId,survey_name,SID,startdatetime)
+  )
+
+#DO NOT EXCLUDE
+survey_timing$exclude <- FALSE#survey_timing$startdatetime>= lubridate::parse_date_time("2021-08-17 00:00:00",orders = "Ymd HMS")
+
+surveys_long <- (
+  surveys_long %>% 
+    merge(survey_timing) %>%
+    filter(exclude==FALSE) %>%
+    select(-exclude,-startdatetime)
+)
+
+```
+
+
+First, check participant IDs that don't match the participant ID regular expression pattern.
+```{r}
+surveys_long %>%
+  select(SID) %>%
+  unique() %>%
+  filter(!grepl(sid_pattern, SID))
+```
+
+Tidy incorrectly formatted participant IDs and exclude responses that are not subject responses.
+
+```{r}
+# print incorrectly formatted IDs
+surveys_long %>%
+  select(SID) %>%
+  unique() %>%
+  filter(!grepl(sid_pattern, SID)) %>%
+  mutate(SID_new = gsub("Dev", "DEV", SID),
+         SID_new = gsub("dev", "DEV", SID_new),
+         SID_new = gsub("DEVI", "DEV", SID_new),
+         SID_new = gsub("DEVl", "DEV", SID_new),
+         SID_new = gsub("DEVo", "DEV", SID_new),
+         SID_new = ifelse(grepl("^[0-9]{3}$", SID_new), paste0("DEV", SID_new), SID_new),
+         SID_new = ifelse(grepl("DEV[0-9]{4}", SID_new), gsub("DEV0", "DEV", SID_new), SID_new),
+         SID_new = ifelse(SID == "DEVO55", "DEV055", SID_new)) %>%
+  arrange(SID_new)
+
+# updated IDs in the survey data
+surveys_sub = surveys_long %>%
+  mutate(SID = gsub("Dev", "DEV", SID),
+         SID = gsub("dev", "DEV", SID),
+         SID = gsub("DEVI", "DEV", SID),
+         SID = gsub("DEVl", "DEV", SID),
+         SID = gsub("DEVo", "DEV", SID),
+         SID = ifelse(grepl("^[0-9]{3}$", SID), paste0("DEV", SID), SID),
+         SID = ifelse(grepl("DEV[0-9]{4}", SID), gsub("DEV0", "DEV", SID), SID),
+         SID = ifelse(SID == "DEVO55", "DEV055", SID)) %>%
+  filter(grepl(sid_pattern, SID)) %>%
+  filter(!grepl(exclude_sid, SID))
+
+# print unique SIDs
+unique(sort(surveys_sub$SID))
+```
+
+Convert missing values to NA.
+```{r}
+surveys_long_na = surveys_sub %>%
+  mutate(value = ifelse(value == "", NA, value))
+```
+
+Check for non-numeric items using the `get_uncoercibles()` function.
+```{r}
+surveys_long_na %>%
+  scorequaltrics::get_uncoercibles() %>%
+  distinct(item, value) %>%
+  arrange(item) %>%
+  head(., 10)
+```
+
+Make manual edits before converting values to numeric during scoring.
+
+Here's an example from anohter survey, but we'll skip this for the DEV example since there's nothing to modify.
+
+```{r eval=FALSE}
+# save ethnicity information as a separate variable
+CVS_3 = surveys_long_na %>%
+  mutate(value = ifelse(item == "CVS_3", tolower(value), value)) %>%
+  filter(item == "CVS_3")
+
+# make manual edits and convert values to numeric
+surveys_long_man = surveys_long_na %>%
+  mutate(value = ifelse(SID == "FP007" & item == "CVS_1", "18",
+                 ifelse(SID == "FP006" & item == "CVS_15", "3.47",
+                 ifelse(SID == "FP002" & item == "CVS_16", "3",
+                 ifelse(SID == "FP006" & item == "CVS_16", "3.7", value)))))
+```
+
+
+Check for duplicate responses. There is a `clean_dupes` function that can do this, but since we have multiple waves with the same surveys, we're going to do this homebrew.
+
+```{r}
+(duplicates = surveys_long_na %>%
+  spread(item, value) %>%
+  group_by(survey_name, SID) %>%
+  summarize(n = n()) %>%
+  arrange(desc(n)) %>%
+  filter(n > 1) %>%
+  mutate(survey_SID = sprintf("%s_%s", survey_name, SID)))
+```
+
+For each participant, determine which survey to use and filter out the others using `ResponseId`.
+
+Select the survey responses with the least missing data, or select the last survey if `n_missing` is equal.
+
+NOTE: Should also verify that these are duplicate responses and not accidental responses to the wrong wave.
+
+```{r}
+# calculate the number of missing responses per survey
+(n_missing = surveys_long_na %>%
+  mutate(survey_SID = sprintf("%s_%s", survey_name, SID)) %>%
+  filter(survey_SID %in% duplicates$survey_SID) %>%
+  filter(is.na(value)) %>%
+  group_by(survey_SID, ResponseId) %>%
+  summarize(n_missing = n()))
+
+# filter out the responses selected to use in scoring
+exclude_response_ids = n_missing %>%
+  filter(!ResponseId %in% c("R_2OIHE4ktdYcm0a7", "R_BEf3vfYhagbnNUl", "R_2TBslmkLEmzJhQO",
+                            "R_1Cr7yJZzyXziAXg", "R_3EMSgAcGdBy5lE6", "R_9tv4Lh4mmYBQaY1",
+                            "R_vGDsF1Xq6wdXCGB", "R_3nAVlaBwD9kU9xP", "R_AyxxcgRp9hFm2Zj",
+                            "R_24EEWwArG7Nrk77", "R_zfqhMGfThNTHGx3", "R_t03olQ4jM7h4xhL",
+                            "R_3lGitKxAqTI9ri8", "R_pb093Br4yxEDbPP", "R_3rNTwD6P0nqzZVf",
+                            "R_3mkjdwllly6g0Gy", "R_9MJVzMgBmdjslyx", "R_336XpIG9yfTL6zS",
+                            "R_beGVZ2QKu7GcxZT", "R_2S7vv3fDokVJwYI", "R_3qrFrS76kW2BhML",
+                            "R_UFN8NOCErVF0fVD", "R_2ZUHiwY8M0s6Wbx", "R_5mQ02A8ywtBVv45",
+                            "R_3mjH74cQsiSOJ5A", "R_sZ2ohYJtIajBDXP", "R_1gNrV5xUzrtLY3D",
+                            "R_w0LUkf7sF5c4eop", "R_3LkiPMqFoXZaP54", "R_1ot2j6SlKbTRjkP",
+                            "R_1Kln0VRBOvZJ1cO", "R_1N9YqQ4ewGSeZg9", "R_3jZisXIgjxuaa4h",
+                            "R_31hJJws8nEQUDTG", "R_3Euk7CvKsVqGw8Q", "R_0xH8tsvKPDGW1DX",
+                            "R_23gcbMleuUGfl1X", "R_27DrVFkCdIZvwNn", "R_3PO9Uy5U0RQlZtI",
+                            "R_zZ7CeIl3eP6O6Vb", "R_3M68oO9gYPMrY0V", "R_PHxUCLXK4S0d5uN",
+                            "R_tSetLV0PGrfGS5j", "R_2dEHbphOgFbGwkr", "R_RDnjHxeAMqw40s9",
+                            "R_YRqc1ppx2JqoLGV", "R_3lK38brLaUxPrV5", "R_28SdLIJLFkBxPc7",
+                            "R_2OMT5G2RmSkxqzM"))
+
+# filter out duplicated responses
+surveys_long_clean = surveys_long_na %>%
+  filter(!ResponseId %in% exclude_response_ids$ResponseId) %>%
+  select(-ResponseId)
+```
+
+
+### Score the questionnaires
+
+```{r rubrics}
+# get only the items used in the scoring rubrics.
+scoring = scorequaltrics::get_rubrics(scoring_rubrics, type = 'scoring')
+
+# score
+scored = scorequaltrics::score_questionnaire(surveys_long_clean, scoring, SID = "SID", psych = FALSE)
+
+# print first 200 rows
+head(scored, 200)
+```
+
+Remove items which are all missing data
+added by ben 2021-12-04
+modified by ben 2021-12-29
+```{r}
+#scored[scored$n_items==0,"score"]="NA"
+scored <- scored %>% mutate(missing_prop = n_missing/(n_missing+n_items))
+#remove values where more than 50% of items were missing
+scored$score <- ifelse(scored$missing_prop>=0.50,NA,scored$score)
+
+scored$missing_prop <- NULL
+```
+
+
+
+## save
+
+Now let's save it so it can be used in other analyses.
+
+```{r}
+
+save(surveys_long_clean,file=paste0(output_file_dir,"/raw_survey_data.RData"))
+save(scored,file=paste0(output_file_dir,"/scored_data.RData"))
+```
+
+
+
+## get some of the demographic data
+
+```{r}
+#set up the code that grabs all this stuff.
+get_demo_data_single_col <- function(item_code, scored_scale){
+  item_rows <- surveys_long_clean[surveys_long_clean$item==item_code,]
+  item_rows$scale_name <- "DEMO"
+  item_rows$scored_scale <- scored_scale
+  item_rows <- rename(item_rows, score=value)
+  item_rows$n_items <- 1
+  item_rows$n_missing <- 0
+  item_rows[is.na(item_rows$score),]$n_items <- 0
+  item_rows[is.na(item_rows$score),]$n_missing <- 1
+  item_rows$method <- NA
+  item_rows<-item_rows%>% select(survey_name, scale_name, scored_scale,SID,score,n_items,n_missing,method)
+  return(item_rows)
+
+}
+```
+
+
+```{r}
+#survey contains two separate sections on demographics with quite a few repeated questiosn
+#I've tried to summarize and compare here
+
+#SES questionnaire
+hh_income <- get_demo_data_single_col("aSES_02","household_income")
+hh_dependent_sum <- get_demo_data_single_col("aSES_08","household_dependents")
+hh_members_grandparents_other <- get_demo_data_single_col("aSES_07","household_members_grandparents_other")
+hh_members_children <- get_demo_data_single_col("aSES_05","household_members_children")
+hh_members_spouse <- get_demo_data_single_col("aSES_04","household_members_spouse")
+
+#DEMO questionnaire
+hh_income_level <- get_demo_data_single_col("DEMO_5","household_income_level")
+hh_size <- get_demo_data_single_col("DEMO_7","household_size")
+
+
+
+hh_data <- data.frame(do.call(rbind,list(hh_dependent_sum,hh_members_grandparents_other,hh_members_children,hh_members_spouse,hh_income_level,hh_size)))
+
+#flip it out wide to see how well these match
+hh_wider <- hh_data %>% pivot_wider(id_cols = "SID",names_from="scored_scale",values_from="score")
+hh_wider$household_min <- ifelse(hh_wider$household_members_children=="1",1,0) + ifelse(hh_wider$household_members_spouse=="1",1,0) + ifelse(hh_wider$household_members_grandparents_other=="1",1,0) + 1
+
+#I think we should use household size. People have misinterpreted the "dependents" question quite substantially.
+
+#then for household per capita income, we need to code in terms of exact numeric will be
+hh_income_level_medamount <- hh_data %>%
+  filter(scored_scale=="household_income_level") %>%
+  mutate(
+    scored_scale="household_income_level_medamount",
+    score = case_when(
+    score=="1" ~ 25000/2,
+    score=="2" ~ mean(25000,40000),
+    score=="3" ~ mean(40000,75000),
+    score=="4" ~ mean(75000,100000),
+    score=="5" ~ 100000,
+    TRUE ~ as.numeric(NA)))
+
+hh_data <- data.frame(do.call(rbind,list(hh_data,hh_income_level_medamount)))
+
+hh_income_per_person <- hh_data %>% 
+  filter(scored_scale %in% c("household_income_level_medamount","household_size")) %>%
+  pivot_wider(id_cols = c("survey_name","scale_name", "SID"),names_from="scored_scale",values_from="score") %>% 
+  mutate("score" = as.numeric(household_income_level_medamount)/as.numeric(household_size),
+         "method"=NA,n_items=NA,n_missing=NA,
+         scored_scale="household_income_per_person") %>%
+  select(-household_income_level_medamount,-household_size)
+  
+hh_data <- data.frame(do.call(rbind,list(hh_data,hh_income_per_person)))
+
+```
+
+
+```{r}
+
+
+#DEMO questionnaire more
+demo_social_standing <- get_demo_data_single_col("DEMO_8","mcarthur_social_standing")
+own_education_level <- get_demo_data_single_col("DEMO_4","education_own")
+own_education_level[own_education_level$score=="14" & !is.na(own_education_level$score),]$score<-as.character(NA)
+table(own_education_level$score)
+demo_indiv_income <- get_demo_data_single_col("aSES_01","individual_income")
+demo_mothers_education <- get_demo_data_single_col("Q20","mother_education")
+demo_fathers_education <- get_demo_data_single_col("Q21","father_education")
+
+
+
+
+
+#zipcode data
+demo_zipcode_data <- get_demo_data_single_col("DEMO_6","zipcode")
+data_dir <- "/Users/benjaminsmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/"
+#using ACS data
+acs_zip_income_data_raw <- readr::read_csv(
+  paste0(data_dir,"acs_dataset/ACSST5Y2019.S1901_data_with_overlays_2021-08-06T142407.csv"),
+  skip = 1)
+acs_zip_income_data <- 
+  acs_zip_income_data_raw %>% 
+  select(id, `Geographic Area Name`, `Estimate!!Households!!Median income (dollars)`, `Estimate!!Households!!Mean income (dollars)`) %>%
+  rename(EstimateHouseholdMedianIncome = `Estimate!!Households!!Median income (dollars)`) %>%
+  rename(EstimateHouseholdMeanIncome = `Estimate!!Households!!Mean income (dollars)`) %>%
+  mutate(Zip = str_match(`Geographic Area Name`,"ZCTA5 (.*)$")[,2]) %>%
+  select(-`Geographic Area Name`)
+
+demo_zipcode_moredata <- demo_zipcode_data %>% merge(acs_zip_income_data,by.x="score",by.y="Zip")
+demo_zipcode_median_income <- demo_zipcode_moredata %>% 
+  mutate(score=EstimateHouseholdMedianIncome,scored_scale="zipcode_median_income_acs") %>% 
+  select(colnames(demo_zipcode_data))
+demo_zipcode_mean_income <- demo_zipcode_moredata %>% 
+  mutate(score=EstimateHouseholdMedianIncome,scored_scale="zipcode_mean_income_acs") %>% 
+  select(colnames(demo_zipcode_data))
+#demo_zipcode_population <- demo_zipcode_moredata %>% mutate(score=Pop,scored_scale="zipcode_pop_2010") %>% select(colnames(demo_zipcode_data))
+demo_zipcode_info <- do.call(rbind,list(demo_zipcode_data,demo_zipcode_median_income,demo_zipcode_mean_income,
+                                        demo_mothers_education,demo_fathers_education))
+
+
+
+
+#using census data
+# zip_income_data <- readr::read_csv(paste0(data_dir,"MedianZIP-3.csv"))
+# zip_income_data$Zip<-as.character(zip_income_data$Zip)
+# demo_zipcode_moredata <- demo_zipcode_data %>% merge(zip_income_data,by.x="score",by.y="Zip")
+# demo_zipcode_median_income <- demo_zipcode_moredata %>% mutate(score=Median,scored_scale="zipcode_median_income_2010") %>% select(colnames(demo_zipcode_data))
+# demo_zipcode_mean_income <- demo_zipcode_moredata %>% mutate(score=Mean,scored_scale="zipcode_mean_income_2010") %>% select(colnames(demo_zipcode_data))
+# demo_zipcode_population <- demo_zipcode_moredata %>% mutate(score=Pop,scored_scale="zipcode_pop_2010") %>% select(colnames(demo_zipcode_data))
+# demo_zipcode_info <- do.call(rbind,list(demo_zipcode_data,demo_zipcode_median_income,demo_zipcode_mean_income,demo_zipcode_population))
+
+```
+
+
+The following doesn't ACTUALLY have ALL the demographic data, but gathers all the data we wanted to collect.
+```{r}
+#now combine all the data
+
+demo_all<- do.call(rbind,list(demo_social_standing,own_education_level,demo_zipcode_info,hh_data,demo_indiv_income))
+
+scored_with_demographics <- data.frame(do.call(rbind,list(scored,demo_all)))
+
+```
+
+
+
+
+
+## save
+  
+```{r}
+
+save(scored_with_demographics,file=paste0(output_file_dir,"/scored_data_w_demographics_for_healthy_env_analysis.RData"))
+```
+
+

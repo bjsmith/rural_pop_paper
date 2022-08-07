@@ -1,0 +1,131 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r}
+
+library(magrittr)
+library(dplyr)
+
+```
+
+
+```{r}
+data_dir <- "/Users/benjaminsmith/Dropbox (University of Oregon)/UO-SAN Lab/Berkman Lab/Devaluation/analysis_files/data/"
+
+preprocessed_data_filepath <- paste0(data_dir,"cloudresearch_survey_results/orfcs_preprocessed_anon_by_subj.csv")
+library(readr)
+library(ggplot2)
+library(GGally)
+preprocessed_data_raw <- readr::read_csv(preprocessed_data_filepath)
+
+
+```
+
+
+
+```{r}
+rows_to_remove <- ((preprocessed_data_raw$EDM_forwardscore<2 & preprocessed_data_raw$EDM_reversescored>4) |
+  (preprocessed_data_raw$EDM_forwardscore>=4.5 & preprocessed_data_raw$EDM_reversescored<2))
+rows_to_remove[is.na(rows_to_remove)]<-FALSE
+sum(rows_to_remove)
+sub_ids_to_remove <- preprocessed_data_raw[rows_to_remove,"SID"]
+preprocessed_data <- preprocessed_data_raw %>% filter((SID %in% unlist(sub_ids_to_remove))==FALSE)
+
+preprocessed_data[!is.na(preprocessed_data$WEIGHT) & preprocessed_data$WEIGHT>500,c("WEIGHT","WEIGHT_kg","BMI")] <- NA
+
+#white is default, largest group
+
+preprocessed_data_raw$RaceCategorical<-factor(preprocessed_data_raw$RaceCategorical,levels=unique(preprocessed_data_raw$RaceCategorical))
+```
+Is there a linear or nonlinear relationship between FFQ and BMI?
+
+```{r}
+
+linear_model_male <- lm(BMI~cancer_promoting_minus_preventing_FFQ +PSS_sum+
+                    DEMO_Age+RaceCategorical ,preprocessed_data %>% filter(Gender3C=="Male"))
+
+linear_model_female <- lm(BMI~cancer_promoting_minus_preventing_FFQ +PSS_sum+
+                    DEMO_Age+RaceCategorical ,preprocessed_data %>% filter(Gender3C=="Female"))
+
+
+
+
+```
+
+```{r}
+quad_model_male <-lm(BMI~cancer_promoting_minus_preventing_FFQ+I(cancer_promoting_minus_preventing_FFQ^2) +PSS_sum+
+                    DEMO_Age+RaceCategorical ,preprocessed_data %>% filter(Gender3C=="Male"))
+
+quad_model_female <- lm(BMI~cancer_promoting_minus_preventing_FFQ+I(cancer_promoting_minus_preventing_FFQ^2) +PSS_sum+
+                    DEMO_Age+RaceCategorical ,preprocessed_data %>% filter(Gender3C=="Female"))
+```
+
+
+```{r}
+print(summary(linear_model_male))
+```
+
+
+```{r}
+print(summary(linear_model_female))
+print(summary(quad_model_female))
+```
+
+Looks like non-linear for women at least.
+
+
+```{r}
+anova(linear_model_female,quad_model_female)
+```
+
+
+Yes, Model 2 is significantly better.
+
+
+
+```{r}
+ggplot(preprocessed_data %>% 
+    filter(Gender3C == "Female"),
+    aes(x=cancer_promoting_minus_preventing_FFQ,y=BMI))+geom_point()+
+  stat_smooth(aes(y=BMI),method="lm",formula=y~x+I(x^2))
+```
+
+
+
+```{r, fig.width=14,fig.height=6}
+ggplot(preprocessed_data %>% 
+    filter(Gender3C == "Female" & !is.na(RuralZIP)),
+    aes(x=cancer_promoting_minus_preventing_FFQ,y=BMI,color=DEMO_Age))+geom_point()+
+  stat_smooth(aes(y=BMI),method="lm",formula=y~x+I(x^2))+
+  facet_wrap(~RuralZIP)
+```
+
+
+```{r, fig.width=14,fig.height=6}
+ggplot(preprocessed_data %>% 
+    filter(Gender3C == "Female" & !is.na(RuralZIP)),
+    aes(x=cancer_promoting_minus_preventing_FFQ,y=BMI,color=RaceCategorical))+geom_point()+
+  #stat_smooth(aes(y=BMI),method="lm",formula=y~x+I(x^2))+
+  facet_wrap(~RuralZIP)
+```
+
+
+Is there an interaction with rurality here?
+
+
+```{r}
+
+summary(lm(BMI~cancer_promoting_minus_preventing_FFQ*RuralZIP +PSS_sum+
+                    DEMO_Age+RaceCategorical ,preprocessed_data %>% filter(Gender3C=="Female")))
+
+#not quite.
+
+summary(lm(BMI~cancer_promoting_minus_preventing_FFQ* +PSS_sum+
+                    DEMO_Age+RaceCategorical ,preprocessed_data %>% filter(Gender3C=="Female")))
+
+```
+Not quite...

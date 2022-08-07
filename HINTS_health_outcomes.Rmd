@@ -1,0 +1,356 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+We've measured BMI as an outcome. But there are plenty of other outcome measure we could use to measure health and they have less problematic health stigma relationships. What can we identify? Janet Tomiyama suggests looking at other health measures from HINTS.
+
+The following are in all relevant cycles which is good:
+
+> In general, would you say your health is…
+>
+>  - Has a doctor or other health professional ever told you that you had any of the following medical conditions: Diabetes or high blood sugar?
+> 
+>  - Has a doctor or other health professional ever told you that you had any of the following medical conditions: High blood pressure or hypertension?
+> 
+>  - Has a doctor or other health professional ever told you that you had any of the following medical conditions: A heart condition such as heart attack, angina or congestive heart failure?
+
+Is there a reason we wouldn't include more HINTS studies than only HINTS 5? We want to know about healthy eating behavior.
+
+Oh... rurality. Only one HINTS study includes rurality; that's HINTS5, Cycle 1 to 4. That's what I use for the data here.
+
+I'll also add:
+
+>  - Have you ever been diagnosed as having cancer?
+
+Pre-registration: https://osf.io/h98wp
+
+So these items are:
+
+ - `GeneralHealth`
+ - `MedConditions_Diabetes`
+ - `MedConditions_HighBP`
+ - `MedConditions_HeartCondition` 
+ - `EverHadCancer`
+ 
+```{r}
+library(mediation)
+library(dplyr)
+Sys.setenv(R_CONFIG_ACTIVE = Sys.info()["nodename"])
+```
+
+
+```{r message=FALSE, warning=FALSE}
+
+source("HINTS_preprocessing.R")
+hints5 <-get_hints5(paste0(config::get("hints_protected_data_folderpath"),"/"))
+boot_times<-10000
+```
+
+
+```{r}
+zscore <- function(x){
+    return((x-mean(x,na.rm=TRUE))/sd(x,na.rm=TRUE))
+  }
+```
+
+## Data available from these variables
+
+Let's take a look at the qualitative data available.
+```{r}
+table(hints5$GeneralHealth_of) %>% cumsum / sum(!is.na(hints5$GeneralHealth_of))
+
+hist(as.integer(hints5$GeneralHealth_of))
+
+hints5$GeneralHealth_i <- as.integer(hints5$GeneralHealth_of)
+hints5$GeneralHealth_z <- zscore(hints5$GeneralHealth_i)
+
+```
+
+This is skewed, but not so skewed it hits my pre-registered criterion for transformation, so we will simply z-score it and proceed with that.
+
+How about the other measures?
+
+```{r}
+
+for (dichot_var in c("MedConditions_Diabetes", "MedConditions_HighBP", "MedConditions_HeartCondition", "EverHadCancer")){
+  print(dichot_var)
+  print(table(hints5 %>% dplyr::select(dichot_var)))
+  var_tally <- hints5 %>% dplyr::select(dichot_var) %>% .[[1]]
+  print("proportion valid reaponses answering 'yes':")
+  yes_tally = sum(var_tally=="Yes")
+  no_tally = sum(var_tally=="No")
+  print(yes_tally/(yes_tally+no_tally))
+  #print(table(hints5 %>% select(dichot_var,"HINTSIsRural")))
+  
+}
+```
+
+As per the pre-register, we will use the individual item MedConditions_HighBP, which has 45% of respondents answering yes, but rather than using MedConditions_Diabetes and MedConditions_HeartCondition, we will calculate an aggregate of all three measures and predict that aggregate. This code has now been moved to HINTS preprocessing.
+```{r}
+#dichotomize these variables so every value is either No, Yes, or NA.
+```
+
+
+
+OK, so we have very few people in the clinical group. Accounting for the rural
+
+## Correlations between outcome variables and a few other important ones
+
+```{r,fig.width=12,fig.height=12}
+data_to_correlate <- hints5[,c(
+  "BMI","GeneralHealth_i","MedConditions_Diabetes_i","MedConditions_HighBP_i","MedConditions_HeartCondition_i","MedConditionsAggregate","EverHadCancer_i","HINTSIsRural_i","Fruit_vegetables_z",
+  "HHInc_r","IncomeRanges_r"
+  )]
+cor_mat <- cor(data_to_correlate,use = "pairwise.complete.obs")
+corrplot::corrplot(cor_mat,type="upper",diag=FALSE,method="number",tl.srt=45)
+```
+
+Some observations about the corrplot:
+
+ - **All four medical conditions we were interested in correlate better with self-reported General Health than they do with BMI.** This is a strong vote of confidence in favor of using self-reported general health over BMI. Two caveats are: (1) self-report variables tend to correlate better with related self-report variables than they do with, say, related behavioral variables, but perhaps just for various reporting bias reasons.(2) Perhaps general health self-report might have less of an advantage over BMI when it comes to reporting _future_ health problems. That said, I take this as a moderate to strong endorsement of a self-report measure of general health over BMI in the context of population sampling.
+ - **BMI still has _some_ relevance to medical conditions**, although you can't make too much of a simple correlation.
+ - Differences in the strength of the objective health correlations with subjective health are related to their prevalence. High blood pressure is the most common medical condition included here (45%) and also has the strongest correlation with general health (0.29). That's followed by diabetes (21%, 0.27), cancer (16%, 0.1), and heart conditions (10%, 0.24); cancer being the exception to the rule here. This more or less follows for correlations with BMI, too.
+## H1. There are poorer health outcomes for rural areas compared to urban ones
+
+To test this, we use regression.
+
+So here, we're testing general health for a start.
+```{r}
+
+
+#health_measures <- c("GeneralHealth", "MedConditions_Diabetes", "MedConditions_HighBP", "MedConditions_HeartCondition", EverHadCancer)
+formula_rhs<-"~HINTSIsRural_i+Age_c+I(Age_c^2)+RacePP+Hisp_Cat2+Gender3C+filename"
+formula_general <- paste0("GeneralHealth_i",formula_rhs)
+
+print(formula_general)
+rural_disparity <- lm(eval(formula_general),hints5)
+
+print_model_summary <- function(model){
+  print(summary(model))
+  conf_ints <- confint(model)
+  if("glm" %in% class(model)){
+    if (model$family$family=="binomial"){
+      print(cbind(OR = exp(coef(model)),exp(conf_ints)))
+      return()
+    }
+  }
+  print(cbind(coef = coef(model),conf_ints))
+  
+}
+
+print_model_summary(rural_disparity)
+
+```
+
+```{r}
+formula_hbp <- paste0("MedConditions_HighBP_i",formula_rhs)
+print(formula_hbp)
+rural_disparity <- glm(eval(formula_hbp),hints5, family = "binomial")
+
+
+print_model_summary(rural_disparity)
+```
+
+Now we use the aggregate value. 
+
+```{r}
+formula_hbp <- paste0("MedConditionsAggregate",formula_rhs)
+print(formula_hbp)
+rural_disparity <- lm(formula_hbp,hints5)
+
+
+
+print_model_summary(rural_disparity)
+```
+Finally, how do we do on the cancer score?
+
+
+```{r}
+table(hints5$EverHadCancer_i,hints5$HINTSIsRural)
+formula_cancer <- paste0("EverHadCancer_i",formula_rhs)
+print(formula_cancer)
+rural_disparity <- glm(eval(formula_cancer),hints5, family = "binomial")
+
+
+
+print_model_summary(rural_disparity)
+```
+
+Right, so the finding is significant for everything we have examined. Controlling for age, race, and gender, rural respondents had:
+
+ - responded 0.16 points higher (poorer health) (b=0.16, p<0.001) on a 5-point scale for the question "In general, would you say your health is excellent, very good, good, fair, or poor?"
+ - In a logistic regression, were 22% more likely to have high blood pressure (OR=1.22, b=0.2, p<0.001)
+ - Scored 0.069 points higher on a 3-point scale tallying reports of high blood pressure, diabetes, or a heart condition
+ - no significantly different odds of having had cancer, although we only had 393 rural subjects with cancer, which makes for a small sample size.
+ 
+Overall, that's a strong result, and we can proceed to look at mediation factors.
+
+## Rural health outcomes are mediated by fruit and vegetable consumption.
+
+
+```{r}
+
+run_HINTS_mediation <- function(outcome,mediator,is_logistic=FALSE){
+  data_to_measure <- hints5[!is.na(hints5[[outcome]]),] %>% filter(Gender3C %in% c("Male","Female"))
+  mb_formula <<-paste0(mediator,"~HINTSIsRural_i+Age_c+I(Age_c^2)+RacePP+Gender3C+filename")
+  mb <<- lm(eval(mb_formula),data_to_measure)
+  mc_formula<<- paste0(outcome, "~", mediator, "+HINTSIsRural_i+Age_c+I(Age_c^2)+RacePP+Gender3C+filename")
+  #mc_direct <- paste0(outcome, "~HINTSIsRural_i+Age_c+I(Age_c^2)+RacePP+Gender3C+filename")
+  ## these have to be global scope because they have to be accessed within the mediate function. d
+  if(is_logistic){
+    mc <<- glm(eval(mc_formula), data=data_to_measure,family="binomial")
+    #m_direct <- glm(eval(mc_direct), data=data_to_measure,family="binomial")
+  }else{
+    mc <<- lm(eval(mc_formula), data=data_to_measure)
+    #m_direct <- lm(eval(mc_direct), data=data_to_measure)
+  }
+  #print(mc_direct)
+  #print(summary(m_direct))
+  
+  
+  print(mb_formula)
+  #print(summary(mb))
+  print(mc_formula)
+  
+  mediation_model <- mediate(mb,mc,sims=boot_times, boot=TRUE,boot.ci.type = "bca",
+                                  treat="HINTSIsRural_i",mediator=mediator)
+
+  print(summary(mc))
+  print(summary(mediation_model))
+  return(mediation_model)
+
+}
+
+
+
+```
+
+```{r mediation1}
+
+library(mediation)
+# GeneralHealth_i #linear
+# MedConditions_HighBP_i #logistic
+# MedConditionsAggregate #linear
+# EverHadCancer_i #linear
+
+set.seed(7042643)
+
+mediation_result = run_HINTS_mediation("GeneralHealth_i", "Fruit_vegetables_z", is_logistic=FALSE)
+```
+
+
+
+
+```{r mediation2}
+# GeneralHealth_i #linear
+# MedConditions_HighBP_i #logistic
+# MedConditionsAggregate #linear
+# EverHadCancer_i #linear
+
+set.seed(7422649)
+
+mediation_result = run_HINTS_mediation("MedConditions_HighBP_i", "Fruit_vegetables_z", is_logistic=TRUE)
+
+
+```
+
+
+
+```{r mediation3}
+# GeneralHealth_i #linear
+# MedConditions_HighBP_i #logistic
+# MedConditionsAggregate #linear
+# EverHadCancer_i #linear
+
+
+
+set.seed(4194457)
+mediation_result = run_HINTS_mediation("MedConditionsAggregate", "Fruit_vegetables_z", is_logistic=FALSE)
+
+```
+
+
+
+
+```{r mediation4}
+# GeneralHealth_i #linear
+# MedConditions_HighBP_i #logistic
+# MedConditionsAggregate #linear
+# EverHadCancer_i #linear
+
+
+
+set.seed(9966743)
+mediation_result = run_HINTS_mediation("EverHadCancer_i", "Fruit_vegetables_z", is_logistic=FALSE)
+
+```
+## Rural health outcomes are mediated by income.
+
+
+
+```{r mediation_income_1}
+#hist(hints5$HHInc_r)
+library(mediation)
+# GeneralHealth_i #linear
+# MedConditions_HighBP_i #logistic
+# MedConditionsAggregate #linear
+# EverHadCancer_i #linear
+
+set.seed(06803234)
+
+mediation_result = run_HINTS_mediation("GeneralHealth_i", "IncomeRanges_r", is_logistic=FALSE)
+```
+
+
+
+
+```{r mediation_income_2}
+# GeneralHealth_i #linear
+# MedConditions_HighBP_i #logistic
+# MedConditionsAggregate #linear
+# EverHadCancer_i #linear
+
+set.seed(96079559)
+
+mediation_result = run_HINTS_mediation("MedConditions_HighBP_i", "IncomeRanges_r", is_logistic=TRUE)
+
+
+```
+
+
+
+```{r mediation_income_3}
+# GeneralHealth_i #linear
+# MedConditions_HighBP_i #logistic
+# MedConditionsAggregate #linear
+# EverHadCancer_i #linear
+
+
+
+set.seed(30738241)
+mediation_result = run_HINTS_mediation("MedConditionsAggregate", "IncomeRanges_r", is_logistic=FALSE)
+
+```
+
+
+```{r mediation_income_4}
+# GeneralHealth_i #linear
+# MedConditions_HighBP_i #logistic
+# MedConditionsAggregate #linear
+# EverHadCancer_i #linear
+
+
+
+set.seed(76567222)
+mediation_result = run_HINTS_mediation("EverHadCancer_i", "IncomeRanges_r", is_logistic=FALSE)
+
+```
+
+```{r}
+save.image(file="HINTS_health_outcomes.Rmd")
+```
+
+
